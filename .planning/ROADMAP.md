@@ -24,3 +24,26 @@
 **Goal:** Build the alternative "Web Interface" option requested during the boot sequence.
 *   **Requirements:** REQ-08
 *   **Success Metrics:** A standalone web application (React/Vue/Svelte) can boot simultaneously, connect to the local server, display streaming tool executions, and handle user chat seamlessly.
+
+---
+
+## Phase 6: Memory Management & Fallback
+**Goal:** Optimize hardware resource utilization by aggressively clearing VRAM and implementing iGPU fallback.
+*   **Requirements:** PERF-01, PERF-03
+*   **Success Metrics:** 
+    1. `start.py` detects and kills orphan `llama-server` or `koboldcpp` processes before launch.
+    2. Fallback logic automatically routes model loading to the iGPU if dGPU VRAM allocation fails.
+
+## Phase 7: Generation Speed & Thought UI
+**Goal:** Maximize TTFT (Time-To-First-Token) and expose agent reasoning visually to the user.
+*   **Requirements:** PERF-02, UX-01
+*   **Success Metrics:**
+    1. Inference configurations are tuned for maximum tokens/sec.
+    2. Internal `<think>` tags are preserved and beautifully rendered as `<thinking>` blocks in both Terminal and Web UI.
+
+## Phase 8: Terminal Input UX & Testing
+**Goal:** Overhaul the terminal submission experience and build the automated tool-accuracy evaluation script.
+*   **Requirements:** UX-02, TEST-01
+*   **Success Metrics:**
+    1. Terminal handles multi-line paste intuitively, submitting on standard Enter or Ctrl+D without requiring double-enter.
+    2. A dedicated test script programmatically validates tool-call structural accuracy against backend models.
