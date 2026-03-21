@@ -1,15 +1,16 @@
-#!/bin/bash
-M="$HOME/gpt-oss-agent/models/OpenAI-20B-NEOPlus-Uncensored-IQ4_NL.gguf"
-[ ! -f "$M" ] && echo "Download model first!" && exit 1
-cd "$(dirname "$0")"
+#!/usr/bin/env bash
+set -euo pipefail
 
-./llama.cpp/build/bin/llama-server \
-    -m "$M" \
-    -ngl 6 \
-    -c 8192 \
-    -t 6 \
-    -b 512 \
-    -ub 256 \
-    -fa on \
-    --host 127.0.0.1 \
-    --port 8080
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+echo "======================================================="
+echo "  Starting Helix Local Model Server"
+echo "======================================================="
+
+if [[ -f "$PROJECT_DIR/venv/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$PROJECT_DIR/venv/bin/activate"
+fi
+
+exec python3 "$PROJECT_DIR/scripts/start_server.py" "$@"

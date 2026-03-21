@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GPT-OSS Agent Setup - Phase 9 unified initialization.
+Helix Agent Setup - Phase 9 unified initialization.
 
 What this installer does:
 1) Detect hardware and recommend optimized config
@@ -707,7 +707,7 @@ def _measure_token_speed_once(llama_bin, model_path, selected_model_name, cpu_th
     cmd = llm_cmd(
         llama_bin,
         model_path,
-        context_size=512,
+        context_size=2048,
         cpu_threads=cpu_threads,
         batch_size=batch_size,
         ubatch_size=ubatch_size,
@@ -778,9 +778,9 @@ def _cuda_candidate_gpu_layers(user_gpu_layers, gpu_vram_gb):
     elif gpu_vram_gb >= 6:
         base = [24, 18, 12, 8]
     elif gpu_vram_gb >= 4:
-        base = [18, 12, 8, 4]
+        base = [33, 27, 21, 15, 12, 8]
     else:
-        base = [8, 4, 2]
+        base = [12, 8, 4, 0]
 
     if user_gpu_layers not in (0, None):
         if user_gpu_layers == -1:
@@ -795,6 +795,9 @@ def _cuda_candidate_gpu_layers(user_gpu_layers, gpu_vram_gb):
             ] + base
             probe = [x for x in probe if x == -1 or (1 <= x <= 64)]
         base = probe
+
+    # Always test these known-good midrange CUDA offload values once.
+    base = [22, 23] + base
 
     seen = set()
     ordered = []
@@ -836,14 +839,15 @@ def enforce_token_speed(llama_bin, model_path, selected_model_name, cpu_threads,
             if tok_s > best_tok_s:
                 best_tok_s = tok_s
                 best_layers = candidate
-            if tok_s >= 10.0:
-                print("  PASS: >= 10 tok/s threshold satisfied")
-                return candidate
         except Exception as exc:
             last_error = exc
             print(f"  Attempt with gpu_layers={candidate} failed: {exc}")
 
     if best_tok_s >= 0:
+        if best_tok_s >= 10.0:
+            print(f"  PASS: >= 10 tok/s threshold satisfied")
+            print(f"  Selected best configuration: gpu_layers={best_layers} at {best_tok_s:.2f} tok/s")
+            return best_layers
         print(f"[!] Setup blocked: best measured speed was {best_tok_s:.2f} tok/s at gpu_layers={best_layers}.")
     elif last_error:
         print(f"[!] Setup blocked: all benchmark attempts failed to start. Last error: {last_error}")
@@ -1034,9 +1038,17 @@ def generate_config(selected_model, models_downloaded, kobold_filename, koboldcp
 
 
 def main():
-    print("=" * 60)
-    print("GPT-OSS Agent Setup (Phase 9 unified initialization)")
-    print("=" * 60)
+    scripts_dir = os.path.join(PROJECT_DIR, "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    try:
+        from helix_branding import print_helix_logo
+
+        print_helix_logo(animated=True, delay=0.015)
+        print()
+    except Exception:
+        # Setup should continue even if branding fails to load.
+        pass
 
     if len(sys.argv) > 1 and sys.argv[1] in ["-h", "--help"]:
         print("Usage: python setup.py [--offline-check]")

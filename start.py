@@ -9,8 +9,10 @@ from scripts.helix_branding import print_helix_logo
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
+print_helix_logo(animated=True, delay=0.015)
+print()
 print("=" * 55)
-print("  Initializing GSD Agent Stack")
+print("  Initializing Helix Agent Stack")
 print("=" * 55)
 
 # 1. Boot the LLM server in the background
