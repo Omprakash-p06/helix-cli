@@ -197,7 +197,7 @@ async fn chat_handler(
             let message = &response.choices[0].message;
 
             if let Some(content) = &message.content {
-                let visible = crate::strip_think_blocks(content);
+                let visible = crate::expose_think_blocks(content);
                 if !visible.is_empty() {
                     let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
                         r#type: "text".to_string(),

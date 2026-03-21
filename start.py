@@ -68,8 +68,23 @@ selected_model_name, selected_model_path = choose_model()
 interface_choice = choose_interface()
 exec_mode = choose_exec_mode()
 
-# 1. Boot the LLM server in the background
-print("\n  Booting Local Engine (llama.cpp) in background...")
+# 1. Clean orphaned GPU processes guarantees VRAM is empty
+def clean_orphaned_servers():
+    print("\n  [i] Cleaning orphaned GPU processes...")
+    try:
+        if os.name == 'nt':
+            subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["taskkill", "/F", "/IM", "koboldcpp.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["pkill", "-f", "llama-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-f", "koboldcpp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+clean_orphaned_servers()
+
+# 2. Boot the LLM server in the background
+print("  [i] Booting Local Engine...")
 logs_dir = os.path.join(PROJECT_DIR, "logs")
 os.makedirs(logs_dir, exist_ok=True)
 server_out_log = os.path.join(logs_dir, "start_server.stdout.log")

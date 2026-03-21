@@ -25,14 +25,10 @@ impl Highlighter for MultiLineHelper {}
 impl Helper for MultiLineHelper {}
 
 impl Validator for MultiLineHelper {
-    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        let input = ctx.input();
-        // Submit on empty input or if input ends with newline (blank line = double Enter)
-        if input.is_empty() || input.ends_with('\n') {
-            Ok(ValidationResult::Valid(None))
-        } else {
-            Ok(ValidationResult::Incomplete)
-        }
+    fn validate(&self, _ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        // Standard submission on Enter.
+        // Users pasting multi-line text are protected by bracketed_paste(true).
+        Ok(ValidationResult::Valid(None))
     }
 }
 

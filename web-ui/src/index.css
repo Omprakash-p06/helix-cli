@@ -29,3 +29,9 @@
     @apply bg-zinc-900/60 backdrop-blur-md border border-white/10 shadow-xl;
   }
 }
+
+@layer components {
+  thinking {
+    @apply block p-4 my-3 text-sm font-mono text-zinc-400 bg-zinc-900/80 border-l-2 border-indigo-500/50 rounded-r-lg whitespace-pre-wrap shadow-inner;
+  }
+}

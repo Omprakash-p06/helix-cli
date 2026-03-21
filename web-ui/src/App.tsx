@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
 import { Send, TerminalSquare, CheckCircle2, XCircle, Bot, User, Loader2 } from 'lucide-react';
 
 type SSEEvent = {
@@ -159,7 +160,7 @@ export default function App() {
                     {/* Final Output */}
                     {msg.content && (
                       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-6 py-4 shadow-sm text-zinc-300 prose prose-invert prose-indigo max-w-none">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
                       </div>
                     )}
                   </div>

@@ -20,10 +20,11 @@ if platform.system() == "Windows":
 else:
     KOBOLD_BIN = "koboldcpp-linux-x64"
 
-KOBOLDCPP_ARGS = ""
+KOBOLDCPP_ARGS = "--flashattention"
 
 # Performance (Tier 3/5 - Mid)
 GPU_LAYERS = 19
+FALLBACK_GPU_LAYERS = 0
 CONTEXT_SIZE = 8192
 CPU_THREADS = 6
 BATCH_SIZE = 512

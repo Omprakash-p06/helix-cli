@@ -176,7 +176,20 @@ def main():
         print("Server shutdown gracefully.")
         sys.exit(0)
 
-    print("\n[!] Primary backend failed. Trying fallback...")
+    print("\n[!] Primary backend failed. Checking logs for VRAM exhaustion...")
+    # Check the log file that start.py redirects our stderr to
+    log_path = os.path.join(PROJECT_DIR, "logs", "start_server.stderr.log")
+    if os.path.exists(log_path):
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            err_content = f.read().lower()
+            if "out of memory" in err_content or "failed to allocate" in err_content or "bad allocation" in err_content:
+                print("  [!] VRAM OOM detected! Falling back to iGPU/System RAM...")
+                config.GPU_LAYERS = getattr(config, "FALLBACK_GPU_LAYERS", 0)
+                if run_llama_server(model_path):
+                    print("Server shutdown gracefully.")
+                    sys.exit(0)
+
+    print("\n[!] Primary backend completely failed. Trying KoboldCPP fallback...")
     if run_koboldcpp(model_path):
         print("Server shutdown gracefully.")
         sys.exit(0)

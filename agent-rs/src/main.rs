@@ -70,26 +70,12 @@ fn print_helix_logo(animated: bool) {
     println!("Py + Rust Hybrid Agent Stack");
 }
 
-pub fn strip_think_blocks(text: &str) -> String {
-    let mut remaining = text;
-    let mut output = String::new();
-
-    loop {
-        if let Some(start) = remaining.find("<think>") {
-            output.push_str(&remaining[..start]);
-            let after_start = &remaining[start + "<think>".len()..];
-            if let Some(end_rel) = after_start.find("</think>") {
-                remaining = &after_start[end_rel + "</think>".len()..];
-            } else {
-                break;
-            }
-        } else {
-            output.push_str(remaining);
-            break;
-        }
-    }
-
-    output.trim().to_string()
+/// Exposes internal `<think>` blocks by mapping them to `<thinking>` tags for the UI,
+/// ensuring the user can see the agent's internal reasoning.
+pub fn expose_think_blocks(text: &str) -> String {
+    let mut s = text.replace("<think>", "\n<thinking>\n");
+    s = s.replace("</think>", "\n</thinking>\n");
+    s.trim().to_string()
 }
 
 #[tokio::main]
@@ -324,7 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let message = &response.choices[0].message;
 
             if let Some(content) = &message.content {
-                let visible = strip_think_blocks(content);
+                let visible = expose_think_blocks(content);
                 if !visible.is_empty() {
                     println!("\n{}\n", visible);
                 }
