@@ -1,0 +1,18 @@
+venv/
+__pycache__/
+logs/
+models/
+
+# Rust build artifacts
+agent-rs/target/
+
+# C/C++ build artifacts
+llama.cpp/build/
+
+# Python cache and transient files
+*.pyc
+*.pyo
+*.pyd
+
+# Packaged outputs
+*.zip
