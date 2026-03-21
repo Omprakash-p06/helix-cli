@@ -144,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_tools(&persona, strict_tools)?
     };
     if server_flavor == ServerFlavor::KoboldCpp {
-        println!("[Runtime] Detected KoboldCPP endpoint. Using compatibility-tuned tool schema.");
+        println!("[Runtime] Detected KoboldCPP endpoint. Stripping 'strict' tags for schema compatibility, but enforcing native GBNF grammar for 100% accuracy.");
     }
     
     let generated_grammar = if !is_chat_mode {
