@@ -2,48 +2,20 @@ mod config;
 mod tools;
 mod tokens;
 mod input;
-// mod rag;
+pub mod types;
+mod server;
 
 use reqwest::Client;
 use schemars::schema_for;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use rustyline::error::ReadlineError;
 use std::thread;
 use std::time::Duration;
 use tools::ToolCallArgs;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct ChatMessage {
-    role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-}
+pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Choice {
-    message: ChatMessage,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServerFlavor {
-    LlamaCpp,
-    KoboldCpp,
-    Unknown,
-}
-
-fn critic_message(text: &str) -> ChatMessage {
+pub fn critic_message(text: &str) -> ChatMessage {
     ChatMessage {
         role: "user".to_string(),
         content: Some(format!("[Rust Critic] {}", text)),
@@ -98,7 +70,7 @@ fn print_helix_logo(animated: bool) {
     println!("Py + Rust Hybrid Agent Stack");
 }
 
-fn strip_think_blocks(text: &str) -> String {
+pub fn strip_think_blocks(text: &str) -> String {
     let mut remaining = text;
     let mut output = String::new();
 
@@ -163,6 +135,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise."
         }
     };
+
+    let ui_mode = std::env::var("HELIX_UI_MODE").unwrap_or_else(|_| "terminal".to_string());
+
+    if ui_mode == "web" {
+        server::start_web_server(
+            app_config,
+            persona,
+            generated_grammar,
+            tools_payload,
+            server_flavor,
+        ).await;
+        // Web server loop handles everything, exit process when done
+        return Ok(());
+    }
 
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),

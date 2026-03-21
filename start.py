@@ -46,11 +46,10 @@ def choose_interface():
     """Prompt user to select between Terminal Chat and Web Interface."""
     print("\nSelect interface:")
     print("  1) Terminal Chat")
-    print("  2) Web Interface (coming soon)")
+    print("  2) Web Interface")
     choice = input("Select interface (1-2, default 1): ").strip()
     if choice == "2":
-        print("  Web interface is planned for Phase 5. Falling back to Terminal.")
-        return "terminal"
+        return "web"
     return "terminal"
 
 
@@ -143,23 +142,38 @@ os.system('cls' if os.name == 'nt' else 'clear')
 print_helix_logo(animated=True, delay=0.02)
 print()
 print(f"Model:     {selected_model_name}")
-print(f"Interface: Terminal")
+print(f"Interface: {interface_choice.capitalize()}")
 print(f"Mode:      {exec_mode.capitalize()}")
 
-print("\n  Handing over to Rust Orchestrator...")
+print("\n  Handing over to Orchestrator...")
 time.sleep(0.5)
 
-# 4. Lock the user into the Rust CLI indefinitely until exit
 try:
     agent_dir = os.path.join(PROJECT_DIR, "agent-rs")
+    web_dir = os.path.join(PROJECT_DIR, "web-ui")
     agent_env = os.environ.copy()
     agent_env["HELIX_EXEC_MODE"] = exec_mode
-    subprocess.call(["cargo", "run", "--quiet"], cwd=agent_dir, env=agent_env)
+    agent_env["HELIX_UI_MODE"] = interface_choice
+    
+    if interface_choice == "web":
+        print("  [i] Booting Rust API and Vite Dev Server...")
+        agent_proc = subprocess.Popen(["cargo", "run", "--quiet"], cwd=agent_dir, env=agent_env)
+        time.sleep(2)  # Wait for API to open port
+        # Using shell=True for npm command wrapper resolves path issues cross-platform
+        web_cmd = ["npm.cmd" if os.name == 'nt' else "npm", "run", "dev", "--", "--open"]
+        web_proc = subprocess.Popen(web_cmd, cwd=web_dir)
+        agent_proc.wait()
+    else:
+        subprocess.call(["cargo", "run", "--quiet"], cwd=agent_dir, env=agent_env)
 except KeyboardInterrupt:
     pass
 finally:
-    # 5. Guaranteed teardown of the phantom llama server child process
-    print("\n  Shutting down engine...")
+    # 5. Guaranteed teardown
+    print("\n  Shutting down stack...")
+    if 'agent_proc' in locals():
+        agent_proc.terminate()
+    if 'web_proc' in locals():
+        web_proc.terminate()
     server_proc.terminate()
     server_proc.wait()
     out_fh.close()

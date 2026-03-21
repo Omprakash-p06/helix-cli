@@ -16,3 +16,8 @@ ignore = "0.4"
 rustyline = { version = "15", features = ["with-file-history"] }
 rustyline-derive = "0.10"
 gbnf = "0.2.6"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+futures-util = "0.3"
+tokio-stream = "0.1"
+bytes = "1.5"
