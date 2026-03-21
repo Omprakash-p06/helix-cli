@@ -46,9 +46,9 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 ## Milestone v1.1 Requirements
 
 ### Performance & Hardware (PERF)
-- [ ] **PERF-01**: The launcher must automatically clear lingering GPU memory (e.g., orphaned `llama-server` or `koboldcpp` processes) before booting a new agent.
+- [x] **PERF-01**: The launcher must automatically clear lingering GPU memory (e.g., orphaned `llama-server` or `koboldcpp` processes) before booting a new agent.
 - [ ] **PERF-02**: The inference pipeline must prioritize fast Time-To-First-Token (TTFT) and high generation speed via configuration tuning.
-- [ ] **PERF-03**: The system must implement a fallback mechanism to route inference to the iGPU if the primary dGPU VRAM is exhausted.
+- [x] **PERF-03**: The system must implement a fallback mechanism to route inference to the iGPU if the primary dGPU VRAM is exhausted.
 
 ### User Experience (UX)
 - [ ] **UX-01**: The orchestrator must extract internal `<think>` blocks and expose them visibly in the terminal and web UI as format-friendly `<thinking>...</thinking>` segments.
