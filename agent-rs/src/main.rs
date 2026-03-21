@@ -348,6 +348,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             messages.push(history_message);
 
             if let Some(tool_calls) = &message.tool_calls {
+                if tool_calls.is_empty() {
+                    break;
+                }
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
 
                 for tc in tool_calls {

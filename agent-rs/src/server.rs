@@ -219,6 +219,13 @@ async fn chat_handler(
             messages.push(history_message);
 
             if let Some(tool_calls) = &message.tool_calls {
+                if tool_calls.is_empty() {
+                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
+                        r#type: "done".to_string(),
+                        content: "".to_string()
+                    }).unwrap())).await;
+                    break;
+                }
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
 
                 for tc in tool_calls {

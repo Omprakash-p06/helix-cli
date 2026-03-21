@@ -23,7 +23,7 @@ else:
 KOBOLDCPP_ARGS = ""
 
 # Performance (Tier 3/5 - Mid)
-GPU_LAYERS = 21
+GPU_LAYERS = 19
 CONTEXT_SIZE = 8192
 CPU_THREADS = 6
 BATCH_SIZE = 512
