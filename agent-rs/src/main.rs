@@ -1,13 +1,14 @@
 mod config;
 mod tools;
 mod tokens;
+mod input;
 // mod rag;
 
 use reqwest::Client;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{self, Write};
+use rustyline::error::ReadlineError;
 use std::thread;
 use std::time::Duration;
 use tools::ToolCallArgs;
@@ -171,34 +172,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     let eval_mode = initial_prompt.is_some();
 
-    if !eval_mode {
+    // Initialize rich terminal editor (skipped in eval mode)
+    let mut rl = if !eval_mode {
         print_helix_logo(true);
         println!();
         println!("\n=======================================================");
         println!("Helix Rust Agent Orchestrator running.");
         println!("Type 'quit' or 'exit' to gracefully stop.");
+        println!("Paste multi-line text freely. Press Enter on an empty line to submit.");
         println!("=======================================================\n");
-    }
+        Some(input::create_editor().expect("Failed to initialize terminal editor"))
+    } else {
+        None
+    };
 
     loop {
         let user_input = if let Some(prompt) = initial_prompt.take() {
             prompt
         } else {
             if eval_mode { break; }
-            print!("> ");
-            io::stdout().flush()?;
-            let mut stdin = String::new();
-            if io::stdin().read_line(&mut stdin).is_err() {
-                continue;
+            let editor = rl.as_mut().unwrap();
+            match editor.readline("> ") {
+                Ok(line) => {
+                    let trimmed = line.trim().to_string();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if trimmed.eq_ignore_ascii_case("quit") || trimmed.eq_ignore_ascii_case("exit") {
+                        input::save_history(editor);
+                        break;
+                    }
+                    trimmed
+                }
+                Err(ReadlineError::Interrupted) => {
+                    continue;
+                }
+                Err(ReadlineError::Eof) => {
+                    input::save_history(editor);
+                    break;
+                }
+                Err(err) => {
+                    println!("[Input Error] {}", err);
+                    continue;
+                }
             }
-            let input = stdin.trim().to_string();
-            if input.is_empty() {
-                continue;
-            }
-            if input.eq_ignore_ascii_case("quit") || input.eq_ignore_ascii_case("exit") {
-                break;
-            }
-            input
         };
 
         messages.push(ChatMessage {
@@ -410,6 +427,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
         }
+    }
+
+    // Persist history on clean exit
+    if let Some(ref mut editor) = rl {
+        input::save_history(editor);
     }
 
     Ok(())
