@@ -133,23 +133,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     
     let persona = std::env::var("AGENT_PERSONA").unwrap_or_else(|_| "os_assistant".to_string());
+    let is_chat_mode = app_config.exec_mode == "chat";
     let url = format!("{}/chat/completions", app_config.base_url.trim_end_matches('/'));
     let server_flavor = detect_server_flavor(&client, &app_config.base_url).await;
     let strict_tools = server_flavor != ServerFlavor::KoboldCpp;
-    let tools_payload = build_tools(&persona, strict_tools)?;
+    let tools_payload = if is_chat_mode {
+        json!([])
+    } else {
+        build_tools(&persona, strict_tools)?
+    };
     if server_flavor == ServerFlavor::KoboldCpp {
         println!("[Runtime] Detected KoboldCPP endpoint. Using compatibility-tuned tool schema.");
     }
 
-    let system_prompt = match persona.as_str() {
-        "coder" => "You are an expert autonomous Safe Coder running through a strict Rust barrier.\n\nYou MUST use provided tools to read and write files. You DO NOT have the ability to execute terminal commands.\nBefore using a tool, briefly explain your reasoning.\nAssume tools execute in a restricted ALLOWED_DIR sandbox.",
-        "researcher" => "You are an expert autonomous read-only System Explorer.\n\nYou MUST use provided tools to read files and gather system stats. You DO NOT have the ability to modify or execute files.\nBefore using a tool, briefly explain your reasoning.\nAssume tools execute in a restricted ALLOWED_DIR sandbox.",
-        _ => "You are an expert autonomous OS Assistant orchestrator running through a strict Rust barrier.\n\nYou MUST use provided tools to read files, command the terminal, or fulfill requirements.\nBefore using a tool, briefly explain your reasoning.\nNever hallucinate file names; always use absolute paths.\nAssume tools execute in a restricted ALLOWED_DIR sandbox.\nIf a command fails or causes an error, read the STDERR carefully and try to correct the issue."
+    let system_prompt = if is_chat_mode {
+        "You are a concise technical assistant. Answer questions directly without tools. Do not greet the user. Do not introduce yourself. Do not use conversational filler."
+    } else {
+        match persona.as_str() {
+            "coder" => "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise.",
+            "researcher" => "You are an autonomous read-only system explorer. You read files and gather system stats using provided tools. You cannot modify files or execute commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise.",
+            _ => "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise."
+        }
     };
 
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
-        content: Some(format!("{}\n\nCRITICAL DIRECTIVE: You MUST NOT output greetings, conversational filler, or pleasantries (e.g. 'Hello', 'I am your assistant'). You must be clinical, concise, and focused purely on analytical reasoning and tool execution. Never introduce yourself.", system_prompt)),
+        content: Some(system_prompt.to_string()),
         tool_calls: None,
         tool_call_id: None,
         name: None,

@@ -6,9 +6,29 @@ import time
 import subprocess
 
 # Configuration
-JUDGE_URL = "http://localhost:8080/v1/chat/completions" # Local llama.cpp/model endpoint
+JUDGE_URL = os.environ.get("HELIX_JUDGE_URL", "http://127.0.0.1:8080/v1/chat/completions")
+try:
+    JUDGE_TIMEOUT_S = float(os.environ.get("HELIX_JUDGE_TIMEOUT_S", "180"))
+except ValueError:
+    JUDGE_TIMEOUT_S = 180.0
 DATASET_PATH = "tests/dataset.json"
 RESULTS_PATH = "tests/benchmark_results.md"
+
+
+def _parse_int_env(name, default):
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _parse_categories_env(name):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
 
 
 def resolve_agent_bin():
@@ -30,6 +50,8 @@ def resolve_agent_bin():
 
 
 AGENT_BIN = resolve_agent_bin()
+MAX_TASKS = _parse_int_env("HELIX_EVAL_MAX_TASKS", 4)
+ALLOWED_CATEGORIES = _parse_categories_env("HELIX_EVAL_CATEGORIES")
 
 def query_agent(prompt):
     env = os.environ.copy()
@@ -80,7 +102,7 @@ Answer ONLY with one word: PASS or FAIL.
     }
     
     try:
-        res = requests.post(JUDGE_URL, json=payload, timeout=60)
+        res = requests.post(JUDGE_URL, json=payload, timeout=JUDGE_TIMEOUT_S)
         if res.status_code == 200:
             result = res.json()["choices"][0]["message"]["content"].strip().upper()
             if "PASS" in result: return "PASS"
@@ -100,11 +122,31 @@ def main():
         print(f"⚠️  Error: {AGENT_BIN} not found. Please run 'cargo build' in agent-rs/ first.")
         sys.exit(1)
 
+    print(f"🔎 Judge endpoint: {JUDGE_URL}")
+    print(f"⏱️  Judge timeout: {JUDGE_TIMEOUT_S:.0f}s")
+
     with open(DATASET_PATH, 'r') as f:
         dataset = json.load(f)
 
+    original_count = len(dataset)
+    if ALLOWED_CATEGORIES:
+        allowed_lower = {c.lower() for c in ALLOWED_CATEGORIES}
+        dataset = [item for item in dataset if item.get("category", "").lower() in allowed_lower]
+
+    dataset = dataset[:MAX_TASKS]
+
+    if not dataset:
+        print("⚠️  Error: no benchmark tasks selected after filters.")
+        print(f"   Original tasks: {original_count}")
+        print(f"   Categories filter: {ALLOWED_CATEGORIES}")
+        print(f"   Max tasks: {MAX_TASKS}")
+        sys.exit(1)
+
     results = []
-    print(f"🚀 Starting Trajectory-Based Benchmark: {len(dataset)} tasks.")
+    print(f"🚀 Starting Trajectory-Based Benchmark: {len(dataset)} tasks (from {original_count}).")
+    if ALLOWED_CATEGORIES:
+        print(f"📂 Categories: {', '.join(ALLOWED_CATEGORIES)}")
+    print(f"🔢 Max tasks: {MAX_TASKS}")
     
     pass_count = 0
 

@@ -33,15 +33,26 @@ def print_helix_logo(animated: bool = True, delay: float = 0.03) -> None:
     dim = "\033[2m" if use_color else ""
     reset = "\033[0m" if use_color else ""
 
-    if animated and sys.stdout.isatty():
-        for line in HELIX_LOGO:
-            print(f"{color}{line}{reset}")
-            time.sleep(max(0.0, delay))
-    else:
-        for line in HELIX_LOGO:
-            print(f"{color}{line}{reset}")
+    def _safe_print(text: str) -> None:
+        try:
+            print(text)
+        except UnicodeEncodeError:
+            print(text.encode("ascii", errors="replace").decode("ascii"))
 
-    print(f"{dim}{HELIX_TAGLINE}{reset}")
+    try:
+        if animated and sys.stdout.isatty():
+            for line in HELIX_LOGO:
+                _safe_print(f"{color}{line}{reset}")
+                time.sleep(max(0.0, delay))
+        else:
+            for line in HELIX_LOGO:
+                _safe_print(f"{color}{line}{reset}")
+
+        _safe_print(f"{dim}{HELIX_TAGLINE}{reset}")
+    except UnicodeEncodeError:
+        # Final fallback for legacy terminal code pages.
+        print("HELIX")
+        print(HELIX_TAGLINE)
 
 
 if __name__ == "__main__":

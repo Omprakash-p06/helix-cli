@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub context_size: usize,
     pub require_confirmation: bool,
     pub dangerous_commands: Vec<String>,
+    pub exec_mode: String,
 }
 
 impl AppConfig {
@@ -18,8 +19,17 @@ impl AppConfig {
 import sys, json, os
 
 try:
-    # We are running from the agent-rs directory, so config.py is in ../scripts/
-    sys.path.insert(0, os.path.abspath('../scripts'))
+    # Support both launch modes:
+    # 1) cwd=agent-rs  -> ../scripts
+    # 2) cwd=project   -> ./scripts
+    candidates = [
+        os.path.abspath('./scripts'),
+        os.path.abspath('../scripts'),
+    ]
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            sys.path.insert(0, candidate)
+
     import config
     
     data = {
@@ -28,6 +38,7 @@ try:
         "context_size": getattr(config, 'CONTEXT_SIZE', 8192),
         "require_confirmation": getattr(config, 'REQUIRE_CONFIRMATION', True),
         "dangerous_commands": getattr(config, 'DANGEROUS_COMMANDS', ["rm", "mv"]),
+        "exec_mode": os.environ.get("HELIX_EXEC_MODE", "agentic"),
     }
     print(json.dumps(data))
 except Exception as e:

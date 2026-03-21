@@ -10,12 +10,13 @@ import platform
 import time
 import argparse
 import shlex
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+
+# Ensure scripts/config.py and helix_branding are importable
+sys.path.insert(0, SCRIPT_DIR)
 from helix_branding import print_helix_logo
-
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Ensure config.py is importable from the project directory
-sys.path.insert(0, PROJECT_DIR)
 try:
     import config
 except ImportError:
@@ -23,15 +24,29 @@ except ImportError:
     sys.exit(1)
 
 
-def run_llama_server():
+def resolve_runtime_model():
+    model_path = os.environ.get("HELIX_MODEL_PATH", "").strip() or config.MODEL_PATH
+    model_name = os.environ.get("HELIX_MODEL_NAME", "").strip() or getattr(config, "MODEL_NAME", os.path.basename(model_path))
+    return model_name, model_path
+
+
+def run_llama_server(model_path):
     """Attempt to start llama-server from the local llama.cpp build."""
     print("Attempting to start llama-server...")
     os_name = platform.system()
-    bin_name = "llama-server.exe" if os_name == "Windows" else "llama-server"
-    llama_bin = os.path.join(PROJECT_DIR, "llama.cpp", "build", "bin", bin_name)
+    candidate_names = ["llama-server.exe", "llama-server"] if os_name == "Windows" else ["llama-server"]
+    llama_bin = ""
+    for name in candidate_names:
+        candidate = os.path.join(PROJECT_DIR, "llama.cpp", "build", "bin", name)
+        if os.path.exists(candidate):
+            llama_bin = candidate
+            break
 
-    if not os.path.exists(llama_bin):
-        print(f"  llama-server not found at: {llama_bin}")
+    if not llama_bin:
+        searched = [os.path.join(PROJECT_DIR, "llama.cpp", "build", "bin", name) for name in candidate_names]
+        print("  llama-server not found. Searched:")
+        for path in searched:
+            print(f"    - {path}")
         return False
 
     batch = getattr(config, "BATCH_SIZE", 512)
@@ -40,7 +55,7 @@ def run_llama_server():
 
     cmd = [
         llama_bin,
-        "-m", config.MODEL_PATH,
+        "-m", model_path,
         "-c", str(config.CONTEXT_SIZE),
         "-t", str(config.CPU_THREADS),
         "-b", str(batch),
@@ -83,7 +98,7 @@ def run_llama_server():
         return False
 
 
-def run_koboldcpp():
+def run_koboldcpp(model_path):
     """Attempt to start KoboldCPP as a fallback."""
     print("\nAttempting to start KoboldCPP (fallback)...")
     kobold_bin_name = getattr(config, "KOBOLD_BIN", "")
@@ -107,7 +122,7 @@ def run_koboldcpp():
 
     cmd = [
         kobold_bin,
-        config.MODEL_PATH,
+        model_path,
         "--host", config.SERVER_HOST,
         "--port", str(config.SERVER_PORT),
         "--gpulayers", str(gpu_layers),
@@ -141,26 +156,28 @@ def main():
     parser = argparse.ArgumentParser(description="Start the local LLM server.")
     parser.parse_args()
 
+    model_name, model_path = resolve_runtime_model()
+
     print_helix_logo(animated=True, delay=0.015)
     print()
     print("=" * 55)
-    print(f"  Starting LLM Server: {config.MODEL_NAME}")
+    print(f"  Starting LLM Server: {model_name}")
     print("=" * 55)
-    print(f"  Model path: {config.MODEL_PATH}")
+    print(f"  Model path: {model_path}")
     print(f"  Endpoint:   http://{config.SERVER_HOST}:{config.SERVER_PORT}/v1")
     print()
 
-    if not os.path.exists(config.MODEL_PATH):
-        print(f"\n[!] Model file not found: {config.MODEL_PATH}")
+    if not os.path.exists(model_path):
+        print(f"\n[!] Model file not found: {model_path}")
         print("[!] Universal GGUF Support Enabled: Please place any 8-32B '.gguf' file into the 'models/' directory.")
         sys.exit(1)
 
-    if run_llama_server():
+    if run_llama_server(model_path):
         print("Server shutdown gracefully.")
         sys.exit(0)
 
     print("\n[!] Primary backend failed. Trying fallback...")
-    if run_koboldcpp():
+    if run_koboldcpp(model_path):
         print("Server shutdown gracefully.")
         sys.exit(0)
     else:

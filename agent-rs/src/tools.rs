@@ -160,9 +160,16 @@ pub fn execute_run_terminal_command(
     }
 
     println!("$ {}", cmd);
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
+    let mut process = if cfg!(target_os = "windows") {
+        let mut p = Command::new("cmd");
+        p.arg("/C").arg(&cmd);
+        p
+    } else {
+        let mut p = Command::new("sh");
+        p.arg("-c").arg(&cmd);
+        p
+    };
+    let output = process
         .current_dir(get_allowed_dir())
         .output();
 

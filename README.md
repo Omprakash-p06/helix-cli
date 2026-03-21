@@ -28,9 +28,9 @@ Helix is a Py + Rust hybrid stack:
 
 4. Launch orchestration (Python)
 - `start.py` is the single-command launcher:
+  - prompts model selection,
   - boots model server in background,
   - waits for readiness,
-  - prompts persona selection,
   - hands off to Rust orchestrator,
   - tears down server on exit.
 
