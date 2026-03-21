@@ -16,3 +16,5 @@ llama.cpp/build/
 
 # Packaged outputs
 *.zip
+
+koboldcpp.exe

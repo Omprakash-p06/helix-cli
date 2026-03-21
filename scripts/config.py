@@ -1,31 +1,31 @@
 import os
-import glob
 
-# Project root directory (auto-detected from scripts/ folder)
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODELS_DIR = os.path.join(PROJECT_DIR, "models")
-os.makedirs(MODELS_DIR, exist_ok=True)
 
-# Phase 11: Universal GGUF Support. Scan directory for any 8-32B model securely.
-# Phase 3 enhancement: Sort by modified time so newly downloaded models automatically boot first.
-available_models = sorted(glob.glob(os.path.join(MODELS_DIR, "*.gguf")), key=os.path.getmtime, reverse=True)
+MODEL_NAME = "Qwen3.5-9B-Uncensored"
+MODEL_PATH = os.path.join(PROJECT_DIR, "models", "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf")
 
-if available_models:
-    # Safely pick the first available GGUF model in the directory
-    MODEL_PATH = available_models[0]
-    MODEL_NAME = os.path.basename(MODEL_PATH).replace(".gguf", "")
-else:
-    # Fallback default if directory happens to be empty
-    MODEL_PATH = os.path.join(MODELS_DIR, "gpt-oss-20b-IQ4_NL.gguf")
-    MODEL_NAME = "gpt-oss-20b"
+AVAILABLE_MODELS = {
+    "Qwen3.5-9B-Uncensored": os.path.join(PROJECT_DIR, "models", "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"),
+}
 
-SERVER_HOST, SERVER_PORT = "127.0.0.1", 8080
+SERVER_HOST = "127.0.0.1"
+SERVER_PORT = 8080
 BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}/v1"
+KOBOLD_BIN = "koboldcpp.exe"
+KOBOLDCPP_ARGS = ""
 
-# Hardware parameters updated via phase 6 offline checks
-GPU_LAYERS, CONTEXT_SIZE, CPU_THREADS = 4, 8192, 6
-REQUIRE_CONFIRMATION, LOG_COMMANDS = True, True
-DANGEROUS_COMMANDS = ["rm", "mv", "chmod", "dd", "mkfs", "fdisk", "systemctl", "reboot", "shutdown"]
+# Performance (Tier 3/5 - Mid)
+GPU_LAYERS = 13
+CONTEXT_SIZE = 8192
+CPU_THREADS = 6
+BATCH_SIZE = 512
+UBATCH_SIZE = 256
+BACKEND_HINT = "cuda"
 
+REQUIRE_CONFIRMATION = True
+LOG_COMMANDS = True
 LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
+
+DANGEROUS_COMMANDS = ["rm", "mv", "chmod", "dd", "mkfs", "fdisk", "systemctl", "reboot", "shutdown"]
