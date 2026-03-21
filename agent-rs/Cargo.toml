@@ -15,3 +15,4 @@ tokio = { version = "1.50.0", features = ["full"] }
 ignore = "0.4"
 rustyline = { version = "15", features = ["with-file-history"] }
 rustyline-derive = "0.10"
+gbnf = "0.2.6"

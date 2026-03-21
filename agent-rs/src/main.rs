@@ -146,6 +146,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if server_flavor == ServerFlavor::KoboldCpp {
         println!("[Runtime] Detected KoboldCPP endpoint. Using compatibility-tuned tool schema.");
     }
+    
+    let generated_grammar = if !is_chat_mode {
+        println!("[Runtime] Compiling JSON schemata to GBNF Grammar...");
+        tools::generate_tool_grammar(&tools_payload)
+    } else {
+        String::new()
+    };
 
     let system_prompt = if is_chat_mode {
         "You are a concise technical assistant. Answer questions directly without tools. Do not greet the user. Do not introduce yourself. Do not use conversational filler."
@@ -284,12 +291,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            let request_body = json!({
+            let mut request_body = json!({
                 "model": app_config.model_name,
                 "messages": &messages,
                 "tools": tools_payload,
                 "temperature": temperature_override
             });
+
+            if !is_chat_mode && !generated_grammar.is_empty() {
+                request_body.as_object_mut().unwrap().insert(
+                    "grammar".to_string(),
+                    json!(generated_grammar)
+                );
+            }
+
 
             let res = match client.post(&url).json(&request_body).send().await {
                 Ok(r) => r,

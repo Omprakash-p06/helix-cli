@@ -363,3 +363,61 @@ pub fn execute_get_system_stats() -> ToolResult {
         output: stats,
     }
 }
+
+pub fn generate_tool_grammar(tools_payload: &serde_json::Value) -> String {
+    use gbnf::Grammar;
+    use serde_json::json;
+
+    // Create a generic function call schema wrapper mimicking OpenAI's payload
+    let schema = json!({
+        "oneOf": [
+            {
+                "type": "string"
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "tool_calls": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "const": "function"
+                                },
+                                "function": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "string",
+                                            "enum": tools_payload.as_array()
+                                                .unwrap_or(&vec![])
+                                                .iter()
+                                                .filter_map(|t| t.pointer("/function/name").and_then(|n| n.as_str()))
+                                                .collect::<Vec<&str>>()
+                                        },
+                                        "arguments": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": ["name", "arguments"]
+                                }
+                            },
+                            "required": ["type", "function"]
+                        }
+                    }
+                },
+                "required": ["tool_calls"]
+            }
+        ]
+    });
+
+    match Grammar::from_json_schema_value(&schema) {
+        Ok(grammar) => grammar.to_string(),
+        Err(e) => {
+            println!("[Warn] Failed to generate grammar from tools: {}", e);
+            String::new()
+        }
+    }
+}
