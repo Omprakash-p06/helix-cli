@@ -11,6 +11,20 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 
 ---
 
+## Current Milestone: v1.1 Operational Upgrades
+
+**Goal:** Improve inference reliability, hardware resource utilization, agent transparency, and developer UX.
+
+**Target features:**
+- Clear GPU memory (kill lingering processes) before booting agents.
+- Expose agent thoughts using `<thinking></thinking>` blocks.
+- Create automated testing for agentic tool call accuracy.
+- Prioritize fast TTFT and generation speed.
+- Implement dGPU to iGPU fallback if VRAM is exhausted.
+- Fix terminal input UX so Enter-on-empty is replaced with a standard submission.
+
+---
+
 ## Requirements
 
 ### Validated
@@ -19,17 +33,21 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 - ✓ Fallback backend support (koboldcpp)
 - ✓ Python hardware benchmarking and unified setup script
 - ✓ Rust orchestrator loop with local filesystem/terminal tool access
+- ✓ Dual UI Launcher (Terminal / Web)
+- ✓ Dual Mode Execution (Agentic / Chat)
+- ✓ Clinical Agent Personas without hallucinated dialogue
+- ✓ Modern Web Interface React app with real-time SSE streaming
+- ✓ Rich Terminal Input with Bracketed Paste
+- ✓ Deterministic Grammar-Enforced Tool Calling (GBNF schemas) across backends
 
 ### Active
 
-- [ ] **Dual UI Launcher:** `start.py` must prompt users to select between (1) Web Interface or (2) Terminal Chat.
-- [ ] **Dual Mode Execution:** `start.py` must support selecting between 'Agentic' (tool-equipped) and 'Chat' modes.
-- [ ] **Cross-Platform Parity:** Ensure identical standards, paths, and execution behaviors across Windows, Linux, and Arch Linux.
-- [ ] **Clinical Agent Personas:** Eliminate all LLM personality trails, conversational filler, and greeting loops (e.g., "Hello! I'm your OS Assistant"). The agent must be purely functional, concise, and focused on tool-calling.
-- [ ] **Modern Web Interface:** A lightweight, modern JS framework (React/Vue/Svelte) frontend communicating with the orchestration backend APIs.
-- [ ] **Rich Terminal Input:** Upgrade the Rust CLI to gracefully support pasting multi-line strings/code using crates like `rustyline` or `inquire`.
-- [ ] **Deterministic Tool Calling (llama.cpp):** Enforce strict JSON output matching the Rust tool schemas natively by generating GBNF (GGML BNF) Grammar dynamically on the fly.
-- [ ] **Deterministic Tool Calling (koboldcpp):** Implement parallel structural or grammar logic for the koboldcpp fallback to ensure reliable tool use.
+- [ ] **PERF-01 (GPU Memory Clearing):** Aggressively clean VRAM/lingering engine processes before any boot.
+- [ ] **PERF-02 (Fast Responses):** Re-tune system args/context configs to prioritize highest tokens/sec.
+- [ ] **PERF-03 (iGPU Fallback):** Automatically transition to iGPU or Unified Memory if the dedicated GPU fails to allocate the model.
+- [ ] **UX-01 (Visible Thoughts):** Map internal `<think>` blocks to visible `<thinking></thinking>` UI segments.
+- [ ] **UX-02 (Terminal Input):** Remove the "double enter" submission logic in terminal in favor of standard single-Enter or Ctrl+D overrides for better UX.
+- [ ] **TEST-01 (Accuracy Profiling):** Build a dedicated script to test tool schemas against local models programmatically.
 
 ### Out of Scope
 

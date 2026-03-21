@@ -40,3 +40,22 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 ## Out of Scope
 *   Handling external cloud LLM APIs (e.g., Anthropic, OpenAI) for the primary loop.
 *   Building UI prototypes with Gradio/Streamlit (as rejected in favor of a modern JS framework).
+
+---
+
+## Milestone v1.1 Requirements
+
+### Performance & Hardware (PERF)
+- [ ] **PERF-01**: The launcher must automatically clear lingering GPU memory (e.g., orphaned `llama-server` or `koboldcpp` processes) before booting a new agent.
+- [ ] **PERF-02**: The inference pipeline must prioritize fast Time-To-First-Token (TTFT) and high generation speed via configuration tuning.
+- [ ] **PERF-03**: The system must implement a fallback mechanism to route inference to the iGPU if the primary dGPU VRAM is exhausted.
+
+### User Experience (UX)
+- [ ] **UX-01**: The orchestrator must extract internal `<think>` blocks and expose them visibly in the terminal and web UI as format-friendly `<thinking>...</thinking>` segments.
+- [ ] **UX-02**: The terminal input loop must provide an intuitive submission method (e.g., Enter for send, Shift+Enter for newline) rather than requiring users to press Enter on an empty line.
+
+### Testing & Validation (TEST)
+- [ ] **TEST-01**: The repository must include an automated evaluation script to explicitly test local model tool-calling accuracy against the predefined schemas.
+
+## Traceability
+*Will be mapped by the roadmapper.*
