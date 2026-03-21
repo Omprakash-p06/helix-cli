@@ -52,10 +52,10 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 
 ### User Experience (UX)
 - [x] **UX-01**: The orchestrator must extract internal `<think>` blocks and expose them visibly in the terminal and web UI as format-friendly `<thinking>...</thinking>` segments.
-- [ ] **UX-02**: The terminal input loop must provide an intuitive submission method (e.g., Enter for send, Shift+Enter for newline) rather than requiring users to press Enter on an empty line.
+- [x] **UX-02**: The terminal input loop must provide an intuitive submission method (e.g., Enter for send, Shift+Enter for newline) rather than requiring users to press Enter on an empty line.
 
 ### Testing & Validation (TEST)
-- [ ] **TEST-01**: The repository must include an automated evaluation script to explicitly test local model tool-calling accuracy against the predefined schemas.
+- [x] **TEST-01**: The repository must include an automated evaluation script to explicitly test local model tool-calling accuracy against the predefined schemas.
 
 ## Traceability
 *Will be mapped by the roadmapper.*
