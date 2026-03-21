@@ -97,6 +97,28 @@ fn print_helix_logo(animated: bool) {
     println!("Py + Rust Hybrid Agent Stack");
 }
 
+fn strip_think_blocks(text: &str) -> String {
+    let mut remaining = text;
+    let mut output = String::new();
+
+    loop {
+        if let Some(start) = remaining.find("<think>") {
+            output.push_str(&remaining[..start]);
+            let after_start = &remaining[start + "<think>".len()..];
+            if let Some(end_rel) = after_start.find("</think>") {
+                remaining = &after_start[end_rel + "</think>".len()..];
+            } else {
+                break;
+            }
+        } else {
+            output.push_str(remaining);
+            break;
+        }
+    }
+
+    output.trim().to_string()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading configuration from python runtime...");
@@ -127,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
-        content: Some(system_prompt.to_string()),
+        content: Some(format!("{}\n\nCRITICAL DIRECTIVE: You MUST NOT output greetings, conversational filler, or pleasantries (e.g. 'Hello', 'I am your assistant'). You must be clinical, concise, and focused purely on analytical reasoning and tool execution. Never introduce yourself.", system_prompt)),
         tool_calls: None,
         tool_call_id: None,
         name: None,
@@ -179,8 +201,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let mut round_trip_counter = 0;
-            let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp { 0.05 } else { 0.1 };
-            let mut temperature_override: f64 = base_temperature;
+        let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp { 0.05 } else { 0.1 };
+        let mut temperature_override: f64 = base_temperature;
 
         loop {
             if round_trip_counter >= 20 {
@@ -188,7 +210,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             round_trip_counter += 1;
-            println!("\n[2m[Round {}/20][0m", round_trip_counter);
+            if eval_mode {
+                println!("\n\u{001b}[2m[Round {}/20]\u{001b}[0m", round_trip_counter);
+            }
 
             let current_tokens = tokens::count_message_tokens(&messages);
             let threshold = (app_config.context_size as f32 * 0.70) as usize;
@@ -273,15 +297,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let message = &response.choices[0].message;
 
             if let Some(content) = &message.content {
-                println!("\nAssistant>");
-                println!("{}\n", content);
+                let visible = strip_think_blocks(content);
+                if !visible.is_empty() {
+                    println!("\n{}\n", visible);
+                }
                 // Clean response (no tool use) — reset temperature to baseline
                 if message.tool_calls.is_none() {
-                        temperature_override = base_temperature;
+                    temperature_override = base_temperature;
                 }
             }
 
-            messages.push(message.clone());
+            // Compatibility fallback: do not replay raw assistant tool_calls back into
+            // history. Different backends/templates disagree on argument typing
+            // (string vs object), which can break subsequent rounds.
+            let mut history_message = message.clone();
+            if history_message.tool_calls.is_some() {
+                history_message.tool_calls = None;
+                if history_message.content.is_none() {
+                    history_message.content = Some("[assistant executed tool calls]".to_string());
+                }
+            }
+
+            messages.push(history_message);
 
             if let Some(tool_calls) = &message.tool_calls {
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
@@ -298,7 +335,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         json!({})
                     };
 
-                    println!("➜ Tool: {}", func_name);
+                    if eval_mode {
+                        println!("➜ Tool: {}", func_name);
+                    }
 
                     let simulated_payload = json!({
                         "name": func_name,

@@ -31,6 +31,12 @@ The overarching Rust terminal loop currently uses standard stdin. It must be upg
 ### REQ-08: Modern Web Frontend
 Design and build a lightweight, fast modern Javascript frontend (React/Vue/Svelte) that connects to the underlying local Orchestrator/API. It must be decoupled from the core terminal loop but provide the exact same agentic capabilities.
 
+### REQ-09: Cross-Platform Parity
+The execution environments, terminal commands, and python boot scripts must operate with identical reliability across Windows, generic Linux distributions, and specifically Arch Linux. Pathing and dependency resolutions must be fully OS-agnostic.
+
+### REQ-10: Clinical Persona Enforcement
+Completely strip all "helpful assistant" personality traits, greetings, and conversational loops from the LLM outputs. The orchestrator must enforce strict, concise, and purely functional responses. The agent should only output its reasoning and execute tools without pleasantries.
+
 ## Out of Scope
 *   Handling external cloud LLM APIs (e.g., Anthropic, OpenAI) for the primary loop.
 *   Building UI prototypes with Gradio/Streamlit (as rejected in favor of a modern JS framework).

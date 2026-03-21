@@ -1,9 +1,9 @@
 # Roadmap
 
 ## Phase 1: Boot Upgrades & Mode Selection
-**Goal:** Enhance the single-command launcher (`start.py`) to provide the necessary UX prompts for UI and Agentic mode selection.
-*   **Requirements:** REQ-04, REQ-05
-*   **Success Metrics:** Executing `start.py` visibly pauses for user input, successfully captures variables for Web/Terminal and Agentic/Chat modes, and passes these variables gracefully into the Rust orchestrator environment.
+**Goal:** Enhance the single-command launcher (`start.py`) to provide the necessary UX prompts for UI and Agentic mode selection, and strip existing personality configurations.
+*   **Requirements:** REQ-04, REQ-05, REQ-09, REQ-10
+*   **Success Metrics:** Executing `start.py` visibly pauses for user input, successfully captures variables for Web/Terminal and Agentic/Chat modes, and passes these variables gracefully into the Rust orchestrator environment. The system prompt natively forbids greetings.
 
 ## Phase 2: Rich Terminal Upgrades
 **Goal:** Replace the naive standard input loop in `agent-rs/src/main.rs` with a robust text-area handling crate.

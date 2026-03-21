@@ -24,6 +24,8 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 
 - [ ] **Dual UI Launcher:** `start.py` must prompt users to select between (1) Web Interface or (2) Terminal Chat.
 - [ ] **Dual Mode Execution:** `start.py` must support selecting between 'Agentic' (tool-equipped) and 'Chat' modes.
+- [ ] **Cross-Platform Parity:** Ensure identical standards, paths, and execution behaviors across Windows, Linux, and Arch Linux.
+- [ ] **Clinical Agent Personas:** Eliminate all LLM personality trails, conversational filler, and greeting loops (e.g., "Hello! I'm your OS Assistant"). The agent must be purely functional, concise, and focused on tool-calling.
 - [ ] **Modern Web Interface:** A lightweight, modern JS framework (React/Vue/Svelte) frontend communicating with the orchestration backend APIs.
 - [ ] **Rich Terminal Input:** Upgrade the Rust CLI to gracefully support pasting multi-line strings/code using crates like `rustyline` or `inquire`.
 - [ ] **Deterministic Tool Calling (llama.cpp):** Enforce strict JSON output matching the Rust tool schemas natively by generating GBNF (GGML BNF) Grammar dynamically on the fly.
