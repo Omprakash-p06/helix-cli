@@ -47,11 +47,11 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 
 ### Performance & Hardware (PERF)
 - [x] **PERF-01**: The launcher must automatically clear lingering GPU memory (e.g., orphaned `llama-server` or `koboldcpp` processes) before booting a new agent.
-- [ ] **PERF-02**: The inference pipeline must prioritize fast Time-To-First-Token (TTFT) and high generation speed via configuration tuning.
+- [x] **PERF-02**: The inference pipeline must prioritize fast Time-To-First-Token (TTFT) and high generation speed via configuration tuning.
 - [x] **PERF-03**: The system must implement a fallback mechanism to route inference to the iGPU if the primary dGPU VRAM is exhausted.
 
 ### User Experience (UX)
-- [ ] **UX-01**: The orchestrator must extract internal `<think>` blocks and expose them visibly in the terminal and web UI as format-friendly `<thinking>...</thinking>` segments.
+- [x] **UX-01**: The orchestrator must extract internal `<think>` blocks and expose them visibly in the terminal and web UI as format-friendly `<thinking>...</thinking>` segments.
 - [ ] **UX-02**: The terminal input loop must provide an intuitive submission method (e.g., Enter for send, Shift+Enter for newline) rather than requiring users to press Enter on an empty line.
 
 ### Testing & Validation (TEST)
