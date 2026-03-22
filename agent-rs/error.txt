@@ -1,0 +1,49 @@
+    Checking agent-rs v0.1.0 (C:\Users\OM Prakash\Documents\helix-agent\agent-rs)
+error[E0599]: no method named `bytes_stream` found for struct `reqwest::Response` in the current scope
+   --> src\main.rs:299:34
+    |
+299 |             let mut stream = res.bytes_stream();
+    |                                  ^^^^^^^^^^^^ method not found in `reqwest::Response`
+
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+   --> src\main.rs:304:24
+    |
+304 |                     Ok(bytes) => {
+    |                        ^^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `Sized` is not implemented for `[u8]`
+    = note: all local variables must have a statically known size
+
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+   --> src\main.rs:304:21
+    |
+304 |                     Ok(bytes) => {
+    |                     ^^^^^^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `Sized` is not implemented for `[u8]`
+note: required by a bound in `std::prelude::v1::Ok`
+   --> /rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library\core\src\result.rs:561:4
+
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+   --> src\main.rs:351:21
+    |
+351 |                     Err(e) => {
+    |                     ^^^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `Sized` is not implemented for `[u8]`
+note: required by a bound in `Err`
+   --> /rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library\core\src\result.rs:566:4
+
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+   --> src\main.rs:302:55
+    |
+302 |             while let Some(chunk_res) = stream.next().await {
+    |                                                       ^^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `Sized` is not implemented for `[u8]`
+note: required by an implicit `Sized` bound in `Result`
+   --> /rustc/4a4ef493e3a1488c6e321570238084b38948f6db/library\core\src\result.rs:557:0
+
+Some errors have detailed explanations: E0277, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `agent-rs` (bin "agent-rs") due to 5 previous errors

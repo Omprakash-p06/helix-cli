@@ -6,7 +6,7 @@ use axum::{
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, net::SocketAddr, sync::Arc};
+use std::convert::Infallible;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
@@ -22,7 +22,6 @@ use crate::tokens;
 pub struct AppState {
     pub client: Client,
     pub app_config: AppConfig,
-    pub persona: String,
     pub generated_grammar: String,
     pub tools_payload: Value,
     pub server_flavor: ServerFlavor,
@@ -41,7 +40,7 @@ pub struct AgentEventPayload {
 
 pub async fn start_web_server(
     app_config: AppConfig,
-    persona: String,
+    _persona: String,
     generated_grammar: String,
     tools_payload: Value,
     server_flavor: ServerFlavor,
@@ -50,7 +49,6 @@ pub async fn start_web_server(
     let state = AppState {
         client,
         app_config,
-        persona,
         generated_grammar,
         tools_payload,
         server_flavor,
@@ -147,7 +145,8 @@ async fn chat_handler(
                 "model": state.app_config.model_name,
                 "messages": &messages,
                 "tools": state.tools_payload,
-                "temperature": temperature_override
+                "temperature": temperature_override,
+                "max_tokens": 8192
             });
 
             if !state.generated_grammar.is_empty() {

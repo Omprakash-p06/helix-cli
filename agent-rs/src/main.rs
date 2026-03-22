@@ -75,6 +75,9 @@ fn print_helix_logo(animated: bool) {
 pub fn expose_think_blocks(text: &str) -> String {
     let mut s = text.replace("<think>", "\n<thinking>\n");
     s = s.replace("</think>", "\n</thinking>\n");
+    if s.contains("<thinking>") && !s.contains("</thinking>") {
+        s.push_str("\n</thinking>");
+    }
     s.trim().to_string()
 }
 
@@ -113,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let system_prompt = if is_chat_mode {
-        "You are a concise technical assistant. Answer questions directly without tools. Do not greet the user. Do not introduce yourself. Do not use conversational filler."
+        "You are a helpful AI assistant. Be concise and direct."
     } else {
         match persona.as_str() {
             "coder" => "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise.",
@@ -267,7 +270,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "model": app_config.model_name,
                 "messages": &messages,
                 "tools": tools_payload,
-                "temperature": temperature_override
+                "temperature": temperature_override,
+                "max_tokens": 8192,
+                "stream": true
             });
 
             if !is_chat_mode && !generated_grammar.is_empty() {
@@ -277,8 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
-
-            let res = match client.post(&url).json(&request_body).send().await {
+            let mut res = match client.post(&url).json(&request_body).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("[Rust] HTTP Error: {}", e);
@@ -286,44 +290,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
-            let response_text = match res.text().await {
-                Ok(t) => t,
-                Err(e) => {
-                    println!("[Rust] Read text error: {}", e);
-                    break;
-                }
-            };
+            use futures_util::stream::StreamExt;
+            use std::io::Write;
 
-            let response: ChatResponse = match serde_json::from_str(&response_text) {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("[Rust] API Parsing Error: {}. Response: {}", e, response_text);
-                    break;
-                }
-            };
+            let mut full_content = String::new();
+            let mut tool_calls_map: std::collections::HashMap<usize, Value> = std::collections::HashMap::new();
 
-            if response.choices.is_empty() {
-                println!("[Rust] Empty choices array returned from LLM.");
-                break;
+            let mut stream = res.bytes_stream();
+            println!();
+            
+            while let Some(chunk_res) = stream.next().await {
+                match chunk_res {
+                    Ok(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        for line in text.lines() {
+                            if line.starts_with("data: ") {
+                                let data = &line[6..];
+                                if data == "[DONE]" { continue; }
+                                if let Ok(json) = serde_json::from_str::<Value>(data) {
+                                    if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                        if let Some(choice) = choices.first() {
+                                            if let Some(delta) = choice.get("delta") {
+                                                if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                    print!("{}", content);
+                                                    std::io::stdout().flush().unwrap();
+                                                    full_content.push_str(content);
+                                                }
+                                                if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                                    for tc in tcs {
+                                                        if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                                            let idx = index as usize;
+                                                            let entry = tool_calls_map.entry(idx).or_insert(json!({
+                                                                "id": "",
+                                                                "type": "function",
+                                                                "function": { "name": "", "arguments": "" }
+                                                            }));
+                                                            if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
+                                                                entry["id"] = json!(id);
+                                                            }
+                                                            if let Some(func) = tc.get("function") {
+                                                                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                                                    let current = entry["function"]["name"].as_str().unwrap_or("");
+                                                                    entry["function"]["name"] = json!(format!("{}{}", current, name));
+                                                                }
+                                                                if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
+                                                                    let current = entry["function"]["arguments"].as_str().unwrap_or("");
+                                                                    entry["function"]["arguments"] = json!(format!("{}{}", current, args));
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("\n[Rust] Stream error: {}", e);
+                    }
+                }
+            }
+            println!();
+
+            let mut final_tool_calls = Vec::new();
+            let mut indices: Vec<usize> = tool_calls_map.keys().copied().collect();
+            indices.sort();
+            for idx in indices {
+                final_tool_calls.push(tool_calls_map[&idx].clone());
             }
 
-            let message = &response.choices[0].message;
+            let message_content = if full_content.is_empty() { None } else { Some(full_content) };
+            let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() { None } else { Some(final_tool_calls) };
 
-            if let Some(content) = &message.content {
-                let visible = expose_think_blocks(content);
-                if !visible.is_empty() {
-                    println!("\n{}\n", visible);
-                }
-                // Clean response (no tool use) — reset temperature to baseline
-                if message.tool_calls.is_none() {
-                    temperature_override = base_temperature;
-                }
+            if message_tool_calls.is_none() {
+                temperature_override = base_temperature;
             }
 
-            // Compatibility fallback: do not replay raw assistant tool_calls back into
-            // history. Different backends/templates disagree on argument typing
-            // (string vs object), which can break subsequent rounds.
-            let mut history_message = message.clone();
+            let mut history_message = ChatMessage {
+                role: "assistant".to_string(),
+                content: message_content.clone(),
+                tool_calls: message_tool_calls.clone(),
+                tool_call_id: None,
+                name: None,
+            };
+            
             if history_message.tool_calls.is_some() {
                 history_message.tool_calls = None;
                 if history_message.content.is_none() {
@@ -333,7 +386,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             messages.push(history_message);
 
-            if let Some(tool_calls) = &message.tool_calls {
+            if let Some(tool_calls) = &message_tool_calls {
                 if tool_calls.is_empty() {
                     break;
                 }
