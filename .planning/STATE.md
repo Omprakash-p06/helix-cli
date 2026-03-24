@@ -5,10 +5,10 @@ milestone_name: milestone
 status: unknown
 last_updated: "2026-03-21T21:07:16.986Z"
 progress:
-  total_phases: 8
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 3
+  total_phases: 9
+  completed_phases: 9
+  total_plans: 9
+  completed_plans: 9
 ---
 
 # Project State
@@ -23,3 +23,8 @@ Plan: Not started
 - Core milestone v1.0 complete, yielding a dual-interface local stack with strict GBNF tool enforcement.
 - Model backend wrapper architecture supports both `llama.cpp` and `koboldcpp`.
 - `main.rs` was heavily refactored to support async streaming over axum while isolating the rustyline CLI loop.
+
+### Roadmap Evolution
+
+- Phase 9 added: Fix terminal chat warning and optimize system prompt
+- Phase 9 execution complete: Terminal chat warning fixed, system prompt empty-push optimized.

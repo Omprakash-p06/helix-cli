@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let system_prompt = if is_chat_mode {
-        "You are a helpful AI assistant. Be concise and direct."
+        ""
     } else {
         match persona.as_str() {
             "coder" => "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise.",
@@ -139,13 +139,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let mut messages = vec![ChatMessage {
-        role: "system".to_string(),
-        content: Some(system_prompt.to_string()),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }];
+    let mut messages = vec![];
+    
+    if !system_prompt.is_empty() {
+        messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: Some(system_prompt.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+    }
 
 
     let args: Vec<String> = std::env::args().collect();
@@ -282,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
-            let mut res = match client.post(&url).json(&request_body).send().await {
+            let res = match client.post(&url).json(&request_body).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("[Rust] HTTP Error: {}", e);

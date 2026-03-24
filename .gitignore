@@ -19,3 +19,6 @@ llama.cpp/build/
 
 koboldcpp.exe
 CHAT_REAPPLY_CHANGE_LIST.md
+
+temp_init.json
+temp_config.json
