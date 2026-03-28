@@ -28,3 +28,8 @@ Plan: Not started
 
 - Phase 9 added: Fix terminal chat warning and optimize system prompt
 - Phase 9 execution complete: Terminal chat warning fixed, system prompt empty-push optimized.
+- Phase 10 added: Terminal UI Foundation
+- Phase 11 added: Output Polish and Streaming
+- Phase 12 added: Control and Feedback
+- Phase 13 added: Context and Discoverability
+- Phase 10 execution complete: TUI foundation built with ratatui, ghost autocomplete, multiline input, status bar.

@@ -34,6 +34,46 @@
 Plans:
 - [x] 01-PLAN.md: Fix warning and optimize prompt push.
 
+### [x] Phase 10: Terminal UI Foundation
+
+**Goal:** Implement foundational TUI using ratatui, crossterm, and tokio with input handling, chat rendering, ghost autocomplete, and status bar.
+**Requirements**: TBD
+**Depends on:** Phase 9
+**Plans:** 1 plan
+
+Plans:
+- [x] 01-PLAN.md: Ratatui foundation, input layer, multiline, command preview.
+
+### Phase 11: Output Polish and Streaming
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 10
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
+
+### Phase 12: Control and Feedback
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 12 to break down)
+
+### Phase 13: Context and Discoverability
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 13 to break down)
+
 ---
 
 ## [x] Phase 6: Memory Management & Fallback
