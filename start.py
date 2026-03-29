@@ -50,7 +50,7 @@ def choose_interface():
     choice = input("Select interface (1-2, default 1): ").strip()
     if choice == "2":
         return "web"
-    return "terminal"
+    return "tui"
 
 
 def choose_exec_mode():
