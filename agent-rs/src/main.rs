@@ -86,14 +86,25 @@ pub fn expose_think_blocks(text: &str) -> String {
 
 fn format_visible_output(text: &str, is_chat_mode: bool) -> String {
     if is_chat_mode {
-        utils::clean_chat_output(text)
+        let cleaned = utils::clean_chat_output(text);
+        if cleaned.trim().is_empty() && !text.trim().is_empty() {
+            "I could not produce a visible response. Please retry.".to_string()
+        } else {
+            cleaned
+        }
     } else {
         expose_think_blocks(text)
     }
 }
 
-fn extract_visible_delta_text(delta: &Value) -> Option<String> {
-    for key in ["content", "reasoning_content", "text", "response"] {
+fn extract_visible_delta_text(delta: &Value, is_chat_mode: bool) -> Option<String> {
+    let keys: &[&str] = if is_chat_mode {
+        &["content", "text", "response"]
+    } else {
+        &["content", "reasoning_content", "text", "response"]
+    };
+
+    for key in keys {
         if let Some(value) = delta.get(key).and_then(|v| v.as_str()) {
             if !value.is_empty() {
                 return Some(value.to_string());
@@ -416,7 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                                         if let Some(choice) = choices.first() {
                                             if let Some(delta) = choice.get("delta") {
-                                                if let Some(content) = extract_visible_delta_text(delta) {
+                                                if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
                                                     if !is_chat_mode {
                                                         print!("{}", content);
                                                         std::io::stdout().flush().unwrap();
@@ -467,7 +478,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
-                                    if let Some(content) = extract_visible_delta_text(delta) {
+                                    if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
                                                     if !is_chat_mode {
                                                         print!("{}", content);
                                                         std::io::stdout().flush().unwrap();
@@ -783,7 +794,7 @@ async fn run_llm_loop_tui(
                                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                                             if let Some(choice) = choices.first() {
                                                 if let Some(delta) = choice.get("delta") {
-                                                    if let Some(content) = extract_visible_delta_text(delta) {
+                                                    if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
                                                         if !generation_started_sent {
                                                             generation_started_sent = true;
                                                             let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
@@ -837,7 +848,7 @@ async fn run_llm_loop_tui(
                                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                                             if let Some(choice) = choices.first() {
                                                 if let Some(delta) = choice.get("delta") {
-                                                    if let Some(content) = extract_visible_delta_text(delta) {
+                                                    if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
                                                         if !generation_started_sent {
                                                             generation_started_sent = true;
                                                             let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
@@ -1053,15 +1064,27 @@ mod tests {
     fn extracts_non_content_visible_text() {
         let delta = json!({"reasoning_content": "hello-from-reasoning"});
         assert_eq!(
-            extract_visible_delta_text(&delta),
+            extract_visible_delta_text(&delta, false),
             Some("hello-from-reasoning".to_string())
         );
     }
 
     #[test]
+    fn chat_mode_ignores_reasoning_content_chunks() {
+        let delta = json!({"reasoning_content": "hidden"});
+        assert_eq!(extract_visible_delta_text(&delta, true), None);
+    }
+
+    #[test]
     fn prefers_content_over_other_fields() {
         let delta = json!({"content": "primary", "text": "secondary"});
-        assert_eq!(extract_visible_delta_text(&delta), Some("primary".to_string()));
+        assert_eq!(extract_visible_delta_text(&delta, true), Some("primary".to_string()));
+    }
+
+    #[test]
+    fn format_visible_output_has_non_empty_chat_fallback() {
+        let input = "<think>hidden</think>";
+        assert!(!format_visible_output(input, true).trim().is_empty());
     }
 
     #[tokio::test]
