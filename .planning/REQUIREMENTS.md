@@ -43,7 +43,7 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 
 ---
 
-## Milestone v1.1 Requirements
+## Milestone v1.1 Requirements (Completed Phases 9-14)
 
 ### Performance & Hardware (PERF)
 - [x] **PERF-01**: The launcher must automatically clear lingering GPU memory (e.g., orphaned `llama-server` or `koboldcpp` processes) before booting a new agent.
@@ -57,5 +57,35 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 ### Testing & Validation (TEST)
 - [x] **TEST-01**: The repository must include an automated evaluation script to explicitly test local model tool-calling accuracy against the predefined schemas.
 
+---
+
+## Milestone v1.2 Requirements (Active)
+
+### Chat Mode Sanity (CHAT)
+- [ ] **CHAT-01**: Strict system prompt enforcement for chat mode that forbids visible reasoning, internal deliberation, and produces direct, concise responses.
+- [ ] **CHAT-02**: Post-processing filter that removes all `<think>`, `<thinking>`, `<analysis>`, and similar internal reasoning markers before display.
+- [ ] **CHAT-03**: Deduplication of consecutive identical phrases/sentences to clean up repeated model outputs.
+- [ ] **CHAT-04**: Normalization of quotes, backticks, and markdown artifacts to ensure professional formatting.
+
+### Live Streaming (STREAM)
+- [ ] **STREAM-01**: Raw byte-level reading from SSE stream (not line-buffered) to enable immediate token capture.
+- [ ] **STREAM-02**: Immediate token rendering with no accumulation delay (remove 30ms timer from v1.1).
+- [ ] **STREAM-03**: Terminal mode stdout flush after each token chunk for live visual feedback.
+- [ ] **STREAM-04**: TUI redraw triggered on every token event (no throttling, real-time responsiveness).
+- [ ] **STREAM-05**: Interrupt-safe token preservation where Ctrl+C displays partial accumulated output instead of blank.
+
+### Non-blocking Tool Execution (TOOL)
+- [ ] **TOOL-01**: Tool execution spawned as async tokio tasks, returning immediately without blocking orchestrator loop.
+- [ ] **TOOL-02**: Tool status feedback displayed in chat UI area as "tool_name: running..." during execution.
+- [ ] **TOOL-03**: Tool result injected into chat history as synthetic ChatMessage::ToolResult after completion.
+- [ ] **TOOL-04**: Multiple tool calls in single response executed concurrently (parallel execution).
+- [ ] **TOOL-05**: Individual tool timeout enforcement (30s max per tool) to prevent hung execution.
+
+### Codebase Cleanup & Quality (CODE)
+- [ ] **CODE-01**: Extract common types into dedicated `agent_core` crate for reuse across orchestrator and CLI.
+- [ ] **CODE-02**: All code passes `cargo clippy` with zero warnings and adheres to Rust formatting standards.
+- [ ] **CODE-03**: Structured tracing integration to log streaming delays, token rates, and tool lifecycle events.
+- [ ] **CODE-04**: Comprehensive test suite covering chat filtering edge cases, streaming UTF-8 robustness, and tool result ordering.
+
 ## Traceability
-*Will be mapped by the roadmapper.*
+*Will be mapped by the roadmapper to phases and success criteria.*
