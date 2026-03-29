@@ -6,6 +6,7 @@ pub mod types;
 mod server;
 mod stream;
 mod tui;
+mod utils;
 
 use reqwest::Client;
 use schemars::schema_for;
@@ -81,6 +82,14 @@ pub fn expose_think_blocks(text: &str) -> String {
         s.push_str("\n</thinking>");
     }
     s.trim().to_string()
+}
+
+fn format_visible_output(text: &str, is_chat_mode: bool) -> String {
+    if is_chat_mode {
+        utils::strip_reasoning_blocks(text).trim().to_string()
+    } else {
+        expose_think_blocks(text)
+    }
 }
 
 fn extract_visible_delta_text(delta: &Value) -> Option<String> {
@@ -408,8 +417,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         if let Some(choice) = choices.first() {
                                             if let Some(delta) = choice.get("delta") {
                                                 if let Some(content) = extract_visible_delta_text(delta) {
-                                                    print!("{}", content);
-                                                    std::io::stdout().flush().unwrap();
+                                                    if !is_chat_mode {
+                                                        print!("{}", content);
+                                                        std::io::stdout().flush().unwrap();
+                                                    }
                                                     full_content.push_str(&content);
                                                 }
                                                 if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
@@ -457,10 +468,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
                                     if let Some(content) = extract_visible_delta_text(delta) {
-                                        print!("{}", content);
-                                        std::io::stdout().flush().unwrap();
-                                        full_content.push_str(&content);
-                                    }
+                                                    if !is_chat_mode {
+                                                        print!("{}", content);
+                                                        std::io::stdout().flush().unwrap();
+                                                    }
+                                                    full_content.push_str(&content);
+                                                }
                                     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                                         for tc in tcs {
                                             if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
@@ -501,7 +514,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 final_tool_calls.push(tool_calls_map[&idx].clone());
             }
 
-            let message_content = if full_content.is_empty() { None } else { Some(full_content) };
+            let message_content = if full_content.is_empty() {
+                None
+            } else {
+                let visible = format_visible_output(&full_content, is_chat_mode);
+                if is_chat_mode && !visible.is_empty() {
+                    print!("{}", visible);
+                    std::io::stdout().flush().unwrap();
+                }
+                Some(visible)
+            };
             let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() { None } else { Some(final_tool_calls) };
 
             if message_tool_calls.is_none() {
@@ -767,7 +789,9 @@ async fn run_llm_loop_tui(
                                                             let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
                                                         }
                                                         full_content.push_str(&content);
-                                                        token_buffer.push_str(&content);
+                                                        if !is_chat_mode {
+                                                            token_buffer.push_str(&content);
+                                                        }
                                                     }
                                                     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                                                         for tc in tcs {
@@ -819,7 +843,9 @@ async fn run_llm_loop_tui(
                                                             let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
                                                         }
                                                         full_content.push_str(&content);
-                                                        token_buffer.push_str(&content);
+                                                        if !is_chat_mode {
+                                                            token_buffer.push_str(&content);
+                                                        }
                                                     }
                                                     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                                                         for tc in tcs {
@@ -881,7 +907,21 @@ async fn run_llm_loop_tui(
             final_tool_calls.push(tool_calls_map[&idx].clone());
         }
 
-        let message_content = if full_content.is_empty() { None } else { Some(full_content) };
+        let message_content = if full_content.is_empty() {
+            None
+        } else {
+            Some(format_visible_output(&full_content, is_chat_mode))
+        };
+
+        if is_chat_mode {
+            if let Some(content) = &message_content {
+                if !content.is_empty() {
+                    let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
+                    let _ = event_tx.send(tui::TuiEvent::TokenChunk(content.clone()));
+                }
+            }
+        }
+
         let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() { None } else { Some(final_tool_calls) };
 
         if message_tool_calls.is_none() {
@@ -1005,7 +1045,7 @@ async fn run_llm_loop_tui(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_visible_delta_text, flush_token_buffer};
+    use super::{extract_visible_delta_text, flush_token_buffer, format_visible_output};
     use serde_json::json;
     use tokio::sync::mpsc;
 
@@ -1038,6 +1078,18 @@ mod tests {
             }
             _ => panic!("expected TokenChunk event"),
         }
+    }
+
+    #[test]
+    fn format_visible_output_strips_reasoning_in_chat_mode() {
+        let input = "hello <think>hidden</think> world";
+        assert_eq!(format_visible_output(input, true), "hello  world");
+    }
+
+    #[test]
+    fn format_visible_output_exposes_reasoning_in_agentic_mode() {
+        let input = "a <think>work</think> b";
+        assert!(format_visible_output(input, false).contains("<thinking>"));
     }
 }
 
