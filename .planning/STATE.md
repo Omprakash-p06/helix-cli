@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to plan
-last_updated: "2026-03-29T06:58:53.703Z"
+last_updated: "2026-03-29T07:10:15.961Z"
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 1
+  total_plans: 2
   completed_plans: 1
 ---
 
@@ -19,6 +19,10 @@ Phase: 12
 Plan: Not started
 
 ## Accumulated Context
+
+### Operational Rules
+
+- **Execution Requirement:** In all future phase executions, after all tasks and feature implementations in a phase are complete, carefully ensure that all project files are fully synced, properly imported, mapped, and configured to work seamlessly with each other before finalizing the execution.
 
 - Core milestone v1.0 complete, yielding a dual-interface local stack with strict GBNF tool enforcement.
 - Model backend wrapper architecture supports both `llama.cpp` and `koboldcpp`.

@@ -56,13 +56,13 @@ Plans:
 
 ### Phase 12: Control and Feedback
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Mid-stream generation interrupts (Ctrl+C), chat history scrolling (PageUp/Down), and live TTFT tracking in the TUI.
+**Requirements**: UX-01, UX-02, PERF-02
 **Depends on:** Phase 11
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 12 to break down)
+- [ ] 12-01-PLAN.md: Interactive Controls and Telemetry
 
 ### Phase 13: Context and Discoverability
 
