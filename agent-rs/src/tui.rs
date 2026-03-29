@@ -43,6 +43,8 @@ pub enum TuiAction {
     Quit,
     /// User requested to interrupt generation.
     Interrupt,
+    /// System command issued.
+    SystemCommand(String),
 }
 
 /// Information about a tool being invoked.
@@ -79,13 +81,17 @@ pub enum TuiEvent {
     SystemMessage(String),
     /// Signals the start of actual token generation (locks TTFT).
     GenerationStarted,
+    /// Updates the token context HUD (current_tokens, max_tokens).
+    ContextUpdate(usize, usize),
+    /// Wipe visual UI memory.
+    ClearHistory,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum InputMode {
     Normal,
-    /// Preview panel shown, awaiting confirmation.
     Preview,
+    Help,
 }
 
 /// A styled span within a chat entry.
@@ -126,6 +132,9 @@ pub struct TuiApp {
     history_index: Option<usize>,
     ttft_start: Option<Instant>,
     ttft_locked: Option<Duration>,
+    pub cwd: String,
+    pub current_tokens: usize,
+    pub max_tokens: usize,
 }
 
 impl TuiApp {
@@ -148,8 +157,25 @@ impl TuiApp {
             history_index: None,
             ttft_start: None,
             ttft_locked: None,
+            cwd: Self::get_formatted_cwd(),
+            current_tokens: 0,
+            max_tokens: 8192,
         }
     }
+
+fn get_formatted_cwd() -> String {
+    if let Ok(path) = std::env::current_dir() {
+        let mut path_str = path.to_string_lossy().to_string();
+        if let Ok(home) = std::env::var("HOME") {
+            if path_str.starts_with(&home) {
+                path_str = path_str.replacen(&home, "~", 1);
+            }
+        }
+        path_str
+    } else {
+        "~".to_string()
+    }
+}
 
     /// Get ghost autocomplete suggestion based on current input.
     fn ghost_suggestion(&self) -> Option<String> {
@@ -316,7 +342,47 @@ fn draw(frame: &mut Frame, app: &TuiApp) {
     // Draw preview overlay if in preview mode
     if app.input_mode == InputMode::Preview {
         draw_preview_overlay(frame, app, size);
+    } else if app.input_mode == InputMode::Help {
+        draw_help_overlay(frame, app, size);
     }
+}
+
+fn draw_help_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let block = Block::default()
+        .title(" Help & Slash Commands ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(if app.no_color { Color::Reset } else { Color::Cyan }));
+
+    let mut lines = vec![];
+    lines.push(Line::from(Span::styled("Keyboard Shortcuts:", Style::default().add_modifier(Modifier::BOLD))));
+    lines.push(Line::from("  Enter         : New line (in input) or submit (in preview)"));
+    lines.push(Line::from("  Alt+Enter     : Submit immediately / Run slash command"));
+    lines.push(Line::from("  Ctrl+C        : Interrupt generation, or quit if idle"));
+    lines.push(Line::from("  Ctrl+D        : Quit"));
+    lines.push(Line::from("  Ctrl+T        : Toggle internal <think> block visibility"));
+    lines.push(Line::from("  Tab           : Accept ghost autocomplete"));
+    lines.push(Line::from("  Up/Down       : Scroll chat (if input empty), else history"));
+    lines.push(Line::from("  PageUp/Down   : Scroll chat history"));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Slash Commands:", Style::default().add_modifier(Modifier::BOLD))));
+    lines.push(Line::from("  /help         : Show this help screen"));
+    lines.push(Line::from("  /clear        : Wipe chat & context history entirely"));
+    lines.push(Line::from("  /quit, /exit  : Exit application"));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Press any key to dismiss.", Style::default().add_modifier(Modifier::DIM))));
+
+    let paragraph = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
+    
+    // Centered rect
+    let popup_area = Rect {
+        x: area.width.saturating_sub(60) / 2,
+        y: area.height.saturating_sub(20) / 2,
+        width: 60.min(area.width),
+        height: 20.min(area.height),
+    };
+    
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
 }
 
 fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
@@ -454,7 +520,7 @@ fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
     };
 
     let chat = Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL).title(" Helix Agent "))
+        .block(Block::default().borders(Borders::ALL).title(format!(" Helix Agent • ⌂ {} ", app.cwd)))
         .wrap(Wrap { trim: false })
         .scroll((scroll.saturating_sub(app.scroll_offset), 0));
 
@@ -508,7 +574,7 @@ fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let char_count = app.input.value().len();
     let ml_count = app.multiline_buffer.len();
 
-    let left = format!(" {} ", app.status_text);
+    let left = format!(" {} | Context: [{} / {}] ", app.status_text, app.current_tokens, app.max_tokens);
     let right = format!(" chars: {} | lines: {} ", char_count, ml_count + 1);
 
     let bar_width = area.width as usize;
@@ -679,6 +745,13 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
                                 }
                             }
                         }
+                        TuiEvent::ContextUpdate(current, max) => {
+                            app.current_tokens = current;
+                            app.max_tokens = max;
+                        }
+                        TuiEvent::ClearHistory => {
+                            app.chat_history.clear();
+                        }
                         TuiEvent::SystemMessage(msg) => {
                             app.chat_history.push(ChatEntry {
                                 role: "system".to_string(),
@@ -713,6 +786,10 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
 /// Handle a key event. Returns false if the app should quit.
 fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::UnboundedSender<TuiAction>) -> bool {
     match app.input_mode {
+        InputMode::Help => {
+            // Any key leaves help mode.
+            app.input_mode = InputMode::Normal;
+        }
         InputMode::Preview => {
             match key.code {
                 KeyCode::Enter => {
@@ -773,12 +850,19 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
                             lines.join("\n")
                         };
 
-                        if full_text.trim() == "/quit" || full_text.trim() == "/exit" {
+                        let trimmed = full_text.trim();
+                        if trimmed == "/quit" || trimmed == "/exit" {
                             let _ = action_tx.send(TuiAction::Quit);
                             return false;
-                        }
-
-                        if let Some(text) = app.submit_input() {
+                        } else if trimmed == "/help" {
+                            app.input_mode = InputMode::Help;
+                            app.input.reset();
+                            app.multiline_buffer.clear();
+                        } else if trimmed.starts_with('/') {
+                            let _ = action_tx.send(TuiAction::SystemCommand(trimmed.to_string()));
+                            app.input.reset();
+                            app.multiline_buffer.clear();
+                        } else if let Some(text) = app.submit_input() {
                             let _ = action_tx.send(TuiAction::Submit(text));
                             app.status_text = "Generating...".to_string();
                             app.is_generating = true;

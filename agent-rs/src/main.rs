@@ -163,6 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if ui_mode == "tui" {
         let (mut action_rx, event_tx) = tui::run_tui().await?;
 
+        // Initialize HUD context
+        let current_tokens = tokens::count_message_tokens(&messages);
+        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(current_tokens, app_config.context_size as usize));
+
         // If there's an initial prompt, send it immediately
         if let Some(prompt) = initial_prompt.take() {
             messages.push(ChatMessage {
@@ -203,6 +207,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Some(tui::TuiAction::Interrupt) => {
                     // Ignore stray interrupts when idle
+                }
+                Some(tui::TuiAction::SystemCommand(cmd)) => {
+                    let c = cmd.trim();
+                    if c == "/clear" {
+                        messages.truncate(1); // Keep the system prompt
+                        let _ = event_tx.send(tui::TuiEvent::ClearHistory);
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage("[Context Cleared]".to_string()));
+                        let current_tokens = tokens::count_message_tokens(&messages);
+                        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(current_tokens, app_config.context_size as usize));
+                    } else {
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[Unknown command] {}", c)));
+                    }
                 }
             }
         }
@@ -567,8 +583,10 @@ async fn run_llm_loop_tui(
             break;
         }
 
-        // Context compaction check
         let current_tokens = tokens::count_message_tokens(messages);
+        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(current_tokens, app_config.context_size as usize));
+
+        // Context compaction check
         let threshold = (app_config.context_size as f32 * 0.70) as usize;
 
         if current_tokens > threshold && messages.len() > 5 {
