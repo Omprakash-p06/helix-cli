@@ -128,7 +128,11 @@ fn flush_token_buffer(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading configuration from python runtime...");
     let app_config = config::AppConfig::load_from_python()?;
-    let client = Client::new();
+    let client = Client::builder()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .build()?;
 
     /*
     println!("\n[RAG] Booting FastEmbed Semantic Knowledge Base... (this may take a moment)");

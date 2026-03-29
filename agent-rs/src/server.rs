@@ -45,7 +45,12 @@ pub async fn start_web_server(
     tools_payload: Value,
     server_flavor: ServerFlavor,
 ) {
-    let client = Client::new();
+    let client = Client::builder()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .build()
+        .expect("failed to build HTTP client");
     let state = AppState {
         client,
         app_config,
