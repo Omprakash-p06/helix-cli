@@ -86,7 +86,7 @@ pub fn expose_think_blocks(text: &str) -> String {
 
 fn format_visible_output(text: &str, is_chat_mode: bool) -> String {
     if is_chat_mode {
-        utils::strip_reasoning_blocks(text).trim().to_string()
+        utils::clean_chat_output(text)
     } else {
         expose_think_blocks(text)
     }

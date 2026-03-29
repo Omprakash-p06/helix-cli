@@ -197,7 +197,7 @@ async fn chat_handler(
 
             if let Some(content) = &message.content {
                 let visible = if state.app_config.exec_mode == "chat" {
-                    crate::utils::strip_reasoning_blocks(content).trim().to_string()
+                    crate::utils::clean_chat_output(content)
                 } else {
                     crate::expose_think_blocks(content)
                 };
