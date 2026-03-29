@@ -176,6 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_llm_loop_tui(
                 &client, &url, &app_config, &mut messages, &tools_payload,
                 &generated_grammar, is_chat_mode, server_flavor, &event_tx,
+                &mut action_rx,
             ).await;
             if eval_mode {
                 return Ok(());
@@ -196,7 +197,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     run_llm_loop_tui(
                         &client, &url, &app_config, &mut messages, &tools_payload,
                         &generated_grammar, is_chat_mode, server_flavor, &event_tx,
+                        &mut action_rx,
                     ).await;
+                }
+                Some(tui::TuiAction::Interrupt) => {
+                    // Interrupt received outside generation loop — ignore
                 }
                 Some(tui::TuiAction::Quit) | None => {
                     break;
@@ -551,6 +556,7 @@ async fn run_llm_loop_tui(
     is_chat_mode: bool,
     server_flavor: ServerFlavor,
     event_tx: &tokio::sync::mpsc::UnboundedSender<tui::TuiEvent>,
+    action_rx: &mut tokio::sync::mpsc::UnboundedReceiver<tui::TuiAction>,
 ) {
     let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp { 0.05 } else { 0.1 };
     let mut temperature_override: f64 = base_temperature;
@@ -648,6 +654,8 @@ async fn run_llm_loop_tui(
         let mut token_buffer = String::new();
         let mut flush_interval = tokio::time::interval(Duration::from_millis(30));
         flush_interval.tick().await; // consume the immediate first tick
+        let mut first_token_sent = false;
+        let mut interrupted = false;
 
         loop {
             tokio::select! {
@@ -666,6 +674,11 @@ async fn run_llm_loop_tui(
                                                     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                                                         full_content.push_str(content);
                                                         token_buffer.push_str(content);
+                                                        // Signal TTFT on first token
+                                                        if !first_token_sent {
+                                                            first_token_sent = true;
+                                                            let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
+                                                        }
                                                     }
                                                     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                                                         for tc in tcs {
@@ -725,7 +738,45 @@ async fn run_llm_loop_tui(
                         token_buffer.clear();
                     }
                 }
+                action = action_rx.recv() => {
+                    match action {
+                        Some(tui::TuiAction::Interrupt) => {
+                            // User pressed Ctrl+C — abort generation
+                            if !token_buffer.is_empty() {
+                                let _ = event_tx.send(tui::TuiEvent::TokenChunk(
+                                    token_buffer.clone()
+                                ));
+                                token_buffer.clear();
+                            }
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                "[Generation Interrupted]".to_string()
+                            ));
+                            interrupted = true;
+                            break;
+                        }
+                        Some(tui::TuiAction::Quit) => {
+                            interrupted = true;
+                            break;
+                        }
+                        _ => {} // Ignore Submit during generation
+                    }
+                }
             }
+        }
+
+        // If interrupted, finalize what we have and stop the round loop
+        if interrupted {
+            let _ = event_tx.send(tui::TuiEvent::ResponseDone);
+            if !full_content.is_empty() {
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: Some(full_content),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                });
+            }
+            break;
         }
 
         // Assemble tool calls
