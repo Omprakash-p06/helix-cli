@@ -1,33 +1,40 @@
 # STACK.md
 
-## Overview
-Helix Agent uses a hybrid Python/Rust stack to manage local AI inference and autonomous agent orchestration.
+## Snapshot
+Last refreshed: 2026-03-29
+Primary product: local-first AI agent stack with Rust orchestrator, Python bootstrap/runtime helpers, and optional React web UI.
 
-## Primary Languages & Runtimes
-*   **Python (3.x):** Used for the setup, provisioning, benchmarking, and launcher layers.
-*   **Rust (2024 edition):** Used for the high-performance orchestration layer, handling LLM iterative loops and tool execution.
-*   **C/C++:** Powering the `llama.cpp` underlying inference engine.
+## Languages
+- Rust (core orchestrator in `agent-rs/`)
+- Python (setup, server launcher, project bootstrap in root and `scripts/`)
+- TypeScript (web UI in `web-ui/`)
+- Shell (startup helpers in `scripts/*.sh`)
 
-## Inference Backends
-*   **llama.cpp:** Primary inference engine, compiled locally during setup with optimizations (CUDA, Vulkan, OpenVINO, or CPU AVX/AMX).
-*   **KoboldCPP:** Used as a fallback inference engine if `llama.cpp` fails.
+## Build and Runtime
+- Rust build: Cargo (`agent-rs/Cargo.toml`, edition 2024)
+- Python runtime: CPython with local scripts
+- Web runtime: Node + Vite (`web-ui/package.json`)
 
-## Key Dependencies (Python)
-*   `requests`, `tqdm`: Used for HTTP requests and progress bars (e.g., downloading `.gguf` models).
-*   `openai`: For API interactions (though custom HTTP calls are also used).
+## Key Rust Dependencies
+- Networking/API: `reqwest`, `axum`, `tower-http`, `tokio-stream`, `futures-util`
+- Serialization/schema: `serde`, `serde_json`, `schemars`
+- LLM and token work: `async-openai`, `tiktoken-rs`, `gbnf`
+- CLI/TUI: `rustyline`, `ratatui`, `crossterm`, `tui-input`
+- System and filesystem: `sysinfo`, `ignore`
 
-## Key Dependencies (Rust)
-Found in `agent-rs/Cargo.toml`:
-*   `tokio`: Async runtime.
-*   `reqwest`: HTTP client for talking to the local OpenAI endpoint.
-*   `serde_json`, `serde`, `schemars`: JSON serialization and JSON Schema generation for OpenAI tool calling.
-*   `async-openai`, `tiktoken-rs`: Token counting and OpenAI schema definitions.
-*   `sysinfo`, `ignore`: Utilities for system metrics and filesystem exploration.
+## Key Python Components
+- `start.py`: top-level launcher for server + agent + optional web UI
+- `scripts/start_server.py`: llama.cpp first, KoboldCPP fallback
+- `setup.py`: environment and model setup workflow
+- `scripts/system_check.py`: host capability detection
 
-## Data & Configuration
-*   **Configuration:** Auto-generated `scripts/config.py` created by `setup.py` after hardware benchmarking.
-*   **Model Weights:** Stored as `.gguf` files in the `models/` directory.
+## Web UI Stack
+- React 19 + TypeScript
+- Vite 8 toolchain
+- Tailwind CSS
+- Markdown rendering via `react-markdown` + `rehype-raw`
 
-## Build Tools
-*   **Cargo & rustup:** For compiling the `agent-rs` orchestrator.
-*   **CMake / MSBuild (Windows) / Make:** For compiling `llama.cpp` natively.
+## External Engine Dependency
+- Local inference engine expected at OpenAI-compatible endpoint (`http://127.0.0.1:8080/v1` by default)
+- Preferred backend: llama.cpp `llama-server`
+- Fallback backend: KoboldCPP

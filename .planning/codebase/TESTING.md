@@ -1,9 +1,32 @@
 # TESTING.md
 
-## Testing Framework & Structure
-*   **Python:** There is a minimal `tests/` directory at the root, but no formal CI runner (e.g. `pytest`) is strictly enforced as a gate yet. Much of the Python "testing" logic is embedded natively inside `setup.py`, which acts as an aggressive hardware benchmark.
-*   **Hardware Benchmark / Gate:** During `setup.py`, a phantom `llama-server` process instance is momentarily started. A small completion prompt is evaluated, and the performance (tokens per second) is measured. If the speed falls below a certain threshold (e.g., 10 tok/s), the setup process warns users and suggests hardware reconfiguration. This acts as an integration test for the inference backend prior to use.
-*   **Rust:** No explicit Rust unit-tests `#[test]` were easily observable in `main.rs`, but standard compilation safety checks apply. The loop relies on real-time LLM interaction which is inherently difficult to unit test without mocking the OpenAI-compatible REST server.
+## Snapshot
+Last refreshed: 2026-03-29
+Testing exists but is uneven across Python, Rust, and web layers.
 
-## Mocking & Coverage
-*   **Missing:** There is currently no robust mocking of the local `llama.cpp` inference server for integration integration testing of the Rust orchestrator layer. Code coverage metrics are seemingly absent.
+## Existing Test Assets
+
+### Rust Unit Tests (inline modules)
+- `agent-rs/src/main.rs` has `mod tests` section.
+- `agent-rs/src/stream.rs` has parser-focused tests.
+- `agent-rs/src/utils.rs` has utility tests.
+
+### Python Evaluation Scripts
+- `tests/test_accuracy.py`: endpoint-driven functional checks for tool call selection behavior.
+- `tests/eval.py`: additional evaluation harness.
+- `tests/dataset.json`: prompt dataset used by evaluation scripts.
+
+## How Tests Are Typically Run
+- Rust: `cd agent-rs && cargo test`
+- Python eval: run scripts under `tests/` after local server is available
+- Web UI: no dedicated automated test suite currently detected (lint/build scripts only)
+
+## Current Gaps
+- No clearly integrated end-to-end CI pipeline at repository root.
+- Web UI lacks unit/integration test framework setup.
+- Some validation relies on manual runtime checks and phase-level UAT docs.
+
+## Suggested Priority Improvements
+1. Add a repeatable root test command that runs Rust + Python checks.
+2. Add web UI component/integration tests.
+3. Add smoke tests for `start.py` orchestration paths (tui/web, chat/agentic).

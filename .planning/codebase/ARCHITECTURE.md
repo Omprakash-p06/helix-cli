@@ -1,23 +1,52 @@
 # ARCHITECTURE.md
 
-## Core Architectural Pattern
-Helix Agent uses a **multi-process hybrid architecture** separating environment management from fast, safe execution.
+## Snapshot
+Last refreshed: 2026-03-29
+Architecture is a hybrid local stack: Python boot/runtime control + Rust agent orchestration + optional React UI.
 
-1.  **Boot & Infrastructure Layer (Python):** Provisions dependencies, builds binaries, benchmarks hardware, and manages the lifecycle of the local server daemon.
-2.  **Inference Layer (C++):** A standalone local LLM HTTP server (`llama-server`) processing inputs without blocking the main workflow.
-3.  **Orchestration Layer (Rust):** The cognitive loop. It handles LLM interactions, enforces schemas, executes local system tools, and handles memory limits.
+## Major Layers
 
-## Component Interactions & Data Flow
-1.  **Launch (`start.py`):** The user invokes Python, which spawns the `start_server.py` daemon in the background to host the LLM. Wait gates are used to ensure the HTTP endpoint is active.
-2.  **Handoff:** Python calls `cargo run` to boot the `agent-rs` Rust binary, transferring foreground terminal control to Rust.
-3.  **Agent Loop (`agent-rs/src/main.rs`):**
-    *   Rust gathers system config via `config.py` (parsed from Python).
-    *   Sends context + system prompt + tool schemas to LLM via local HTTP.
-    *   Receives response. If `tool_calls` are present, Rust maps them to native functions (`tools::execute_read_file`, etc.).
-    *   Appends `tool` response roles to the context window and loops.
-4.  **Memory Compaction:** The Rust loop monitors total tokens (via `tiktoken-rs`). Once a threshold (e.g., 70% of context size) is breached, it interrupts the loop. It slices the oldest messages, sends them to the LLM with a "summarize" directive, and replaces the history chunk with a single dense summary message to free up context space.
-5.  **Teardown:** On Rust exit, the `start.py` orchestrator catches the return and successfully terminates the background `llama-server` process.
+### 1) Boot and Environment Layer (Python)
+- Entry point: `start.py`
+- Responsibilities:
+  - Model selection and mode selection (web vs tui, agentic vs chat)
+  - Start local inference server process
+  - Wait for model API readiness
+  - Start Rust orchestrator and optional web dev server
 
-## Extension & Customization Points
-*   **Personas:** The Rust orchestrator determines tool access based on the `AGENT_PERSONA` env var (e.g., `os_assistant` gets terminal commands, `coder` is restricted to file I/O).
-*   **Memory Critic Feedback:** Rust intercepts tool usage schema errors and command failures, manually injecting synthetic "Critic" prompts to dynamically guide the LLM to self-correct during the next iteration.
+### 2) Inference Server Layer (Python + local binaries)
+- Launcher: `scripts/start_server.py`
+- Primary path: llama.cpp `llama-server`
+- Fallback path: KoboldCPP
+- Exposes OpenAI-compatible API at `:8080/v1`
+
+### 3) Agent Orchestrator Layer (Rust)
+- Main loop: `agent-rs/src/main.rs`
+- Behavior:
+  - Loads config via Python bridge (`agent-rs/src/config.rs`)
+  - Builds tool schemas/grammar
+  - Calls local model endpoint
+  - Parses streaming deltas and tool calls
+  - Supports chat, terminal UI, and web-server modes
+- Safety and tooling:
+  - Filesystem sandbox checks in `agent-rs/src/tools.rs`
+  - Dangerous command gating based on config
+
+### 4) Presentation Layer
+- TUI path: `agent-rs/src/tui.rs` (Ratatui + Crossterm)
+- Web path: `agent-rs/src/server.rs` + `web-ui/src/App.tsx`
+  - Axum emits SSE events
+  - React consumes incremental text and tool status events
+
+## Data Flow (Web Mode)
+1. User submits message in React app.
+2. React calls `POST /chat` on Rust API (`:3000`).
+3. Rust agent sends request(s) to local LLM endpoint (`:8080/v1`).
+4. Rust emits SSE events (`text`, `tool_start`, `tool_result`, `error`, `done`).
+5. React app incrementally renders output and tool activity.
+
+## Data Flow (TUI Mode)
+1. User submits message in TUI.
+2. TUI action channel sends submit event to main loop.
+3. Main loop streams model output and tool events back to TUI event channel.
+4. TUI updates context HUD, content panes, and status indicators.

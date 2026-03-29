@@ -1,19 +1,43 @@
 # INTEGRATIONS.md
 
-## Local API Endpoints
-*   **OpenAI-Compatible Local Server:** The `llama-server` (or KoboldCPP fallback) binds to `127.0.0.1:8080/v1` by default.
-    *   `/v1/models`: Queried by both Python launchers and Rust orchestrator to check readiness and which model is loaded.
-    *   `/v1/chat/completions`: The core endpoint used by `agent-rs` to run the agentic loop.
-    *   `/v1/completions`: Used by `setup.py` during hardware benchmarking to measure token-per-second throughput.
+## Snapshot
+Last refreshed: 2026-03-29
+This project is mostly local-only and integrates with local processes/services rather than SaaS APIs.
 
-## External Services
-*   **Hugging Face API:**
-    *   `https://huggingface.co/api/models`: The `setup.py` scripts hit this REST API to search repositories and inspect repo trees for `.gguf` files during universal model downloading.
-*   **GitHub Releases:**
-    *   Used to download pre-compiled `koboldcpp` binaries directly based on the OS platform.
+## Runtime Service Integrations
 
-## Tool Integrations (Rust Orchestrator)
-The Rust agent defines several built-in OS tools it executes directly on the system:
-*   **File System:** `read_file`, `write_file`, `append_file`, `list_directory`.
-*   **Terminal:** `run_terminal_command` (restricted to `os_assistant` persona, runs arbitrary shell commands with confirmation gating).
-*   **System Stats:** `get_system_stats` interacts with the host OS natively via the `sysinfo` crate.
+### Local LLM API
+- Endpoint: `http://127.0.0.1:8080/v1`
+- API style: OpenAI-compatible chat completions
+- Caller: Rust orchestrator (`agent-rs/src/main.rs`, `agent-rs/src/server.rs`)
+- Transport: HTTP via `reqwest`
+
+### Rust Agent Web API
+- Endpoint: `http://127.0.0.1:3000`
+- Routes:
+  - `POST /chat` (SSE stream of agent events)
+  - `GET /health`
+- Server implementation: Axum in `agent-rs/src/server.rs`
+- Consumer: React app (`web-ui/src/App.tsx`)
+
+## Process Integrations
+- `start.py` launches `scripts/start_server.py`, then launches Rust orchestrator.
+- In web mode, `start.py` also launches Vite dev server for `web-ui`.
+- `scripts/start_server.py` starts `llama-server`; falls back to KoboldCPP if needed.
+
+## OS-Level Integrations
+- Process cleanup:
+  - Linux/macOS: `pkill -f llama-server|koboldcpp`
+  - Windows: `taskkill /IM llama-server.exe|koboldcpp.exe`
+- Tool execution in Rust uses sandbox checks and runs commands in project directory (`agent-rs/src/tools.rs`).
+
+## Filesystem Integrations
+- Models from `models/*.gguf`
+- Logs written under `logs/`
+- Python config bridge reads `scripts/config.py`
+- Rust tool sandbox root resolves to repository root
+
+## Not Present
+- No cloud auth providers
+- No remote database integration in primary flow
+- No managed queue/broker dependency

@@ -1,23 +1,41 @@
 # STRUCTURE.md
 
-## Directory Layout
-*   `agent-rs/`: The Rust orchestrator project.
-    *   `src/main.rs`: Core execution loop, HTTP API interaction, memory compaction.
-    *   `src/tools.rs`: Defines and executes local tool calls (Terminal, Filesystem, Stats).
-    *   `src/config.rs`: Bridges Python `config.py` settings into Rust.
-    *   `src/tokens.rs`: Token counting logic.
-*   `scripts/`: Python utilities and server launchers.
-    *   `start_server.py`: Launches `llama.cpp` or `koboldcpp`.
-    *   `system_check.py`: Checks host hardware mappings.
-    *   `config.py`: Generated configuration values.
-    *   `helix_branding.py`: Reusable ASCII UI components.
-*   `models/`: Directory where `.gguf` weights are downloaded and stored.
-*   `logs/`: Runtime standard out / error logs for the isolated LLM server process.
-*   `llama.cpp/`: The upstream C++ inference engine submodule (built locally).
-*   `/`: Root deployment items.
-    *   `setup.py`: Unified installation, benchmarking, and build script.
-    *   `start.py`: One-command runtime stack launcher.
+## Snapshot
+Last refreshed: 2026-03-29
+Repository contains product code plus a large vendored/embedded `llama.cpp` tree.
 
-## Key Boundaries
-*   **Python <-> Rust:** There is no direct FFI. Python prepares the environment and spawns Rust as a sub-process. Rust reads Python configs by spawning Python specifically to dump the `config.py` object out as JSON.
-*   **Orchestrator <-> Engine:** Completely decoupled via HTTP REST APIs over `127.0.0.1:8080`.
+## Top-Level Layout
+- `agent-rs/`: Rust orchestrator and APIs
+- `scripts/`: Python operational scripts (server start, checks, branding)
+- `web-ui/`: React + Vite frontend
+- `tests/`: Python evaluation scripts and dataset
+- `.planning/`: roadmap, phase plans, research, codebase docs
+- `llama.cpp/`: large upstream inference backend source tree
+- Root scripts: `start.py`, `setup.py`, `update_milestone.py`
+
+## Rust App Structure (`agent-rs/src`)
+- `main.rs`: top-level orchestration loop and mode routing
+- `server.rs`: Axum endpoints and SSE stream handling
+- `tui.rs`: terminal UI state/event system
+- `tools.rs`: tool schemas + execution with sandbox enforcement
+- `config.rs`: Python bridge for runtime config loading
+- `types.rs`: chat and protocol data structures
+- `stream.rs`: SSE parser utilities
+- `tokens.rs`, `utils.rs`, `input.rs`, `rag.rs`: support modules
+
+## Web App Structure (`web-ui/src`)
+- `App.tsx`: single-page chat UI and SSE client logic
+- `main.tsx`: React entry point
+- Styling in `App.css` and `index.css`
+- Static assets under `web-ui/public` and `web-ui/src/assets`
+
+## Planning and Process Files
+- `.planning/PROJECT.md`: project vision and milestones
+- `.planning/ROADMAP.md`: phase requirements and plan listings
+- `.planning/STATE.md`: current execution state and rules
+- `.planning/phases/*`: context, plans, summaries, validation docs
+- `.planning/codebase/*`: generated codebase map documents
+
+## Notable Scale Consideration
+- `llama.cpp/` dominates file count and can drown code search results.
+- Most Helix-specific product changes happen outside `llama.cpp/`.

@@ -1,13 +1,43 @@
 # CONCERNS.md
 
-## Technical Debt & Fragile Areas
-*   **Environment Assumptions:** The `setup.py` makes strict, broad assumptions about package managers and dependencies (e.g., `winget`, `rustup`, `cmake`, Visual C++ Build Tools). These assumptions fail easily on customized setups, leading to difficult troubleshooting.
-*   **Subprocess Management:** Python handles the LLM server lifecycle as a background `.Popen()` process without strong IPC. If either the Python parent process or the Rust Orchestrator process crash abruptly, the background inference engine can become orphaned, leaving port 8080 locked.
-*   **Memory Context Slicing Loss:** The Rust memory compaction logic executes a forced LLM summarization of past messages when 70% of the token context window is full. If the LLM generates a poor semantic summary, precise factual data (like file paths or function names) from early in the conversation may be irreversibly lost.
+## Snapshot
+Last refreshed: 2026-03-29
+This file tracks architectural and operational risks observed in current codebase state.
 
-## Security
-*   **Command Execution:** The Rust `run_terminal_command` tool is extremely powerful. Currently, it triggers based on the `AGENT_PERSONA` flag (`os_assistant`). A malicious or hallucinating LLM could execute destructive file-system or network commands if they bypass `app_config.dangerous_commands` filters.
+## High-Risk Concerns
 
-## Bugs & Known Issues
-*   **KoboldCPP Fallback Tuning:** Passing the correct CLI arguments dynamically to `koboldcpp` vs `llama.cpp` causes complexity. E.g., OpenVINO hardware settings are mapped awkwardly to CPU-only if falling back to `koboldcpp`.
-*   **RAG Implementation:** Vector search / semantic RAG features inside the Rust orchestrator are currently commented out (`// mod rag;` in `main.rs`), meaning it lacks internal semantic memory search out-of-the-box.
+### 1) Repository Noise from Vendored `llama.cpp`
+- Symptom: search and indexing are heavily polluted by upstream files.
+- Impact: slower navigation and easier mistakes during edits.
+- Mitigation: scope searches to Helix-owned paths (`agent-rs/`, `scripts/`, `web-ui/`, `.planning/`).
+
+### 2) Process Orchestration Complexity in `start.py`
+- Symptom: one script manages model startup, readiness checks, rust process, and optional web process.
+- Impact: failure handling and teardown paths can become brittle across modes.
+- Mitigation: keep logs centralized and consider isolating startup stages into testable units.
+
+### 3) Cross-Language Config Bridge Fragility
+- Symptom: Rust runtime config depends on Python import and execution success.
+- Impact: missing or broken `scripts/config.py` blocks agent startup.
+- Mitigation: validate config at startup with clearer preflight errors and fallback defaults.
+
+## Medium-Risk Concerns
+
+### 4) SSE Parsing and Stream Robustness
+- Symptom: stream handling spans Rust server, parser utilities, and React client parsing loop.
+- Impact: partial/malformed chunks can degrade UX or hide output.
+- Mitigation: expand parser/client tests with chunk-boundary edge cases.
+
+### 5) Tool Surface and Safety Expectations
+- Symptom: agent tools include file writes and shell execution.
+- Impact: misconfiguration could increase local risk.
+- Mitigation: keep sandbox checks strict and dangerous command lists explicit.
+
+### 6) Test Coverage Imbalance
+- Symptom: web UI and orchestration paths have weaker automated coverage than core Rust modules.
+- Impact: regressions can slip into integration flows.
+- Mitigation: prioritize integration tests around `/chat` SSE and launcher modes.
+
+## Low-Risk/Operational Observations
+- Large logs can accumulate under `logs/` during repeated runs.
+- Multiple interface modes increase combinatorial QA matrix.
