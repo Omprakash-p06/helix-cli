@@ -472,6 +472,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(e) => {
                         println!("\n[Rust] Stream error: {}", e);
+                        if full_content.is_empty() && tool_calls_map.is_empty() {
+                            let mut fallback_body = request_body.clone();
+                            fallback_body["stream"] = json!(false);
+                            if let Ok(fallback_res) = client.post(&url).json(&fallback_body).send().await {
+                                if let Ok(fallback_text) = fallback_res.text().await {
+                                    if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&fallback_text) {
+                                        if let Some(choice) = parsed.choices.first() {
+                                            if let Some(content) = &choice.message.content {
+                                                full_content.push_str(content);
+                                            }
+                                            if let Some(tcs) = &choice.message.tool_calls {
+                                                for (idx, tc) in tcs.iter().enumerate() {
+                                                    tool_calls_map.insert(idx, tc.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        break;
                     }
                 }
             }
@@ -844,6 +865,30 @@ async fn run_llm_loop_tui(
                             let _ = event_tx.send(tui::TuiEvent::SystemMessage(
                                 format!("[Stream error] {}", e)
                             ));
+                            if full_content.is_empty() && tool_calls_map.is_empty() {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                    "[Recovery] Retrying without stream...".to_string()
+                                ));
+                                let mut fallback_body = request_body.clone();
+                                fallback_body["stream"] = json!(false);
+                                if let Ok(fallback_res) = client.post(url).json(&fallback_body).send().await {
+                                    if let Ok(fallback_text) = fallback_res.text().await {
+                                        if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&fallback_text) {
+                                            if let Some(choice) = parsed.choices.first() {
+                                                if let Some(content) = &choice.message.content {
+                                                    full_content.push_str(content);
+                                                }
+                                                if let Some(tcs) = &choice.message.tool_calls {
+                                                    for (idx, tc) in tcs.iter().enumerate() {
+                                                        tool_calls_map.insert(idx, tc.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            break;
                         }
                         None => {
                             for event in sse_parser.finish() {
