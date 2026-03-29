@@ -29,7 +29,7 @@
 **Goal:** Remove `unused_mut` compiler warning and suppress the default terminal chat system prompt to optimize Time-To-First-Token.
 **Requirements**: UX-03 (Performance Harmonization)
 **Depends on:** Phase 8
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [x] 01-PLAN.md: Fix warning and optimize prompt push.
@@ -39,7 +39,7 @@ Plans:
 **Goal:** Implement foundational TUI using ratatui, crossterm, and tokio with input handling, chat rendering, ghost autocomplete, and status bar.
 **Requirements**: TBD
 **Depends on:** Phase 9
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [x] 01-PLAN.md: Ratatui foundation, input layer, multiline, command preview.
@@ -73,6 +73,62 @@ Plans:
 
 Plans:
 - [x] TBD (run /gsd-plan-phase 13 to break down) (completed 2026-03-29)
+
+### Phase 14: Fix TUI Missing Output Bug
+
+**Goal:** Restore reliable TUI output by fixing streamed SSE parsing and token-to-UI rendering flow.
+**Requirements**: UX-01, TEST-01
+**Depends on:** Phase 13
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 14-01-PLAN.md — Repair streaming parser and token rendering pipeline with regression tests. (completed 2026-03-29)
+- [x] 14-02-PLAN.md — Close UAT gaps for stuck/blank live streaming visibility, tool-phase feedback, and interrupt flush safety. (completed 2026-03-29)
+
+### Phase 15: Chat Mode Polish Foundation
+
+**Goal:** Implement strict system prompt isolation for chat mode and strip internal reasoning traces from user-visible output.
+**Requirements**: CHAT-01, CHAT-02, CHAT-03, CHAT-04
+**Depends on:** Phase 14
+**Plans:** 0/2 plans
+
+Plans:
+- [ ] 15-01-PLAN.md: Chat mode system prompt and reasoning filter
+- [ ] 15-02-PLAN.md: Output deduplication and quote normalization
+
+### Phase 16: Live Streaming & Immediate Rendering
+
+**Goal:** Refactor SSE streaming from line-buffered to byte-level reads; eliminate accumulation delays; ensure immediate token rendering.
+**Requirements**: STREAM-01, STREAM-02, STREAM-03, STREAM-04, STREAM-05
+**Depends on:** Phase 15
+**Plans:** 0/2 plans
+
+Plans:
+- [ ] 16-01-PLAN.md: Byte-level SSE parsing and immediate render
+- [ ] 16-02-PLAN.md: Terminal and TUI reactivity, interrupt safety
+
+### Phase 17: Non-Blocking Tool Execution
+
+**Goal:** Implement async tool spawning, concurrent execution, and status feedback without blocking the orchestrator loop.
+**Requirements**: TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05
+**Depends on:** Phase 16
+**Plans:** 0/2 plans
+
+Plans:
+- [ ] 17-01-PLAN.md: Async task spawning and tool status UI
+- [ ] 17-02-PLAN.md: Parallel execution, result ordering, and timeouts
+
+### Phase 18: Production Quality & Codebase Consolidation
+
+**Goal:** Extract shared types into `agent_core` crate, achieve clippy-clean status, integrate structured tracing, and build comprehensive test suite.
+**Requirements**: CODE-01, CODE-02, CODE-03, CODE-04
+**Depends on:** Phase 17
+**Plans:** 0/1 plans
+
+Plans:
+- [ ] 18-01-PLAN.md: Types refactor, code cleanup, tracing, and tests
+
+---
 
 ---
 

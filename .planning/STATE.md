@@ -1,22 +1,23 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: Milestone complete
-last_updated: "2026-03-29T07:56:35.086Z"
+milestone: v1.2
+milestone_name: "Chat Mode Polish & Streaming Reliability"
+status: Requirements defined, roadmap created
+last_updated: "2026-03-29T18:05:00.000Z"
 progress:
-  total_phases: 3
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 1
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 7
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Current Position
 
-Phase: 13
-Plan: Not started
+Phase: 15 (Ready for planning)
+Plan: —
+Status: Milestone v1.2 roadmap complete, ready to plan Phase 15
 
 ## Accumulated Context
 
@@ -24,16 +25,22 @@ Plan: Not started
 
 - **Execution Requirement:** In all future phase executions, after all tasks and feature implementations in a phase are complete, carefully ensure that all project files are fully synced, properly imported, mapped, and configured to work seamlessly with each other before finalizing the execution.
 
-- Core milestone v1.0 complete, yielding a dual-interface local stack with strict GBNF tool enforcement.
-- Model backend wrapper architecture supports both `llama.cpp` and `koboldcpp`.
-- `main.rs` was heavily refactored to support async streaming over axum while isolating the rustyline CLI loop.
+### Milestone Context
+
+**v1.2 Vision:** Chat mode produces direct, concise responses without visible reasoning. Streaming is live (token-by-token). Tool calling is non-blocking with parallel support.
+
+**Four Key Phases:**
+- **Phase 15:** Chat Mode Polish Foundation (system prompt, reasoning filter, dedup, normalization)
+- **Phase 16:** Live Streaming & Immediate Rendering (byte-level parsing, no buffering, interrupt safety)
+- **Phase 17:** Non-Blocking Tool Execution (async spawning, parallel, timeout enforcement)
+- **Phase 18:** Production Quality (types refactor, clippy, tracing, tests)
+
+**16 Active Requirements:** CHAT-01 through CHAT-04, STREAM-01 through STREAM-05, TOOL-01 through TOOL-05, CODE-01 through CODE-04
+
+**Research Completed:** STACK.md, FEATURES.md, ARCHITECTURE.md, PITFALLS.md, SUMMARY.md (no new dependencies, mechanical implementation, 7-day estimate)
 
 ### Roadmap Evolution
 
-- Phase 9 added: Fix terminal chat warning and optimize system prompt
-- Phase 9 execution complete: Terminal chat warning fixed, system prompt empty-push optimized.
-- Phase 10 added: Terminal UI Foundation
-- Phase 11 added: Output Polish and Streaming
-- Phase 12 added: Control and Feedback
-- Phase 13 added: Context and Discoverability
-- Phase 10 execution complete: TUI foundation built with ratatui, ghost autocomplete, multiline input, status bar.
+- v1.0 (Phases 1-8): Core infrastructure, grammar enforcement, web UI
+- v1.1 (Phases 9-14): TUI foundation, streaming fixes, output polish, gap closure
+- v1.2 (Phases 15-18): Chat filtering, live streaming, async tools, production cleanup
