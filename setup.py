@@ -496,6 +496,13 @@ def build_llama_cpp(backend_hint):
     ensure_cmake_available()
 
     src_dir = os.path.join(PROJECT_DIR, "llama.cpp")
+    if not os.path.isfile(os.path.join(src_dir, "CMakeLists.txt")):
+        print("  llama.cpp source not found. Cloning repository automatically...")
+        if os.path.exists(src_dir):
+            import shutil
+            shutil.rmtree(src_dir, ignore_errors=True)
+        run_cmd(["git", "clone", "https://github.com/ggerganov/llama.cpp.git", src_dir])
+
     build_dir = os.path.join(src_dir, "build")
     os.makedirs(build_dir, exist_ok=True)
 

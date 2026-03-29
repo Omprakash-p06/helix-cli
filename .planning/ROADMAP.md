@@ -59,10 +59,10 @@ Plans:
 **Goal:** Mid-stream generation interrupts (Ctrl+C), chat history scrolling (PageUp/Down), and live TTFT tracking in the TUI.
 **Requirements**: UX-01, UX-02, PERF-02
 **Depends on:** Phase 11
-**Plans:** 1 plan
+**Plans:** 0/1 plans complete
 
 Plans:
-- [ ] 12-01-PLAN.md: Interactive Controls and Telemetry
+- [x] 12-01-PLAN.md: Interactive Controls and Telemetry
 
 ### Phase 13: Context and Discoverability
 

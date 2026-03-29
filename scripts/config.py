@@ -12,7 +12,7 @@ AVAILABLE_MODELS = {
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
 BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}/v1"
-KOBOLD_BIN = "koboldcpp.exe"
+KOBOLD_BIN = "koboldcpp-linux-x64"
 KOBOLDCPP_ARGS = ""
 
 # Performance (Tier 3/5 - Mid)

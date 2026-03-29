@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::{Instant, Duration};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -41,7 +41,7 @@ pub enum TuiAction {
     Submit(String),
     /// User requested quit.
     Quit,
-    /// User pressed Ctrl+C while generating — cancel current generation.
+    /// User requested to interrupt generation.
     Interrupt,
 }
 
@@ -71,12 +71,14 @@ pub enum TuiEvent {
     ToolResult(ToolResultInfo),
     /// Model finished its response.
     ResponseDone,
-    /// First token received — locks the TTFT timer.
-    GenerationStarted,
     /// Status text for the status bar.
     Status(String),
+    /// A precise status tick for metrics (like TTFT updates).
+    StatusUpdate(String),
     /// System message (info/warning).
     SystemMessage(String),
+    /// Signals the start of actual token generation (locks TTFT).
+    GenerationStarted,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,19 +116,15 @@ pub struct TuiApp {
     /// Whether we are currently inside a <think> block.
     in_think_block: bool,
     /// Whether the model is currently generating.
-    pub is_generating: bool,
+    is_generating: bool,
     /// Toggle visibility of thinking blocks (Ctrl+T).
     show_thoughts: bool,
     scroll_offset: u16,
-    /// Total rendered line count from last draw (for scroll clamping).
-    scroll_height: u16,
     status_text: String,
     no_color: bool,
     command_history: Vec<String>,
     history_index: Option<usize>,
-    /// TTFT tracking: when generation request was sent.
     ttft_start: Option<Instant>,
-    /// TTFT tracking: locked duration once first token arrives.
     ttft_locked: Option<Duration>,
 }
 
@@ -144,7 +142,6 @@ impl TuiApp {
             is_generating: false,
             show_thoughts: true,
             scroll_offset: 0,
-            scroll_height: 0,
             status_text: String::from("Ready"),
             no_color,
             command_history: Vec::new(),
@@ -299,7 +296,7 @@ impl TuiApp {
 
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
-fn draw(frame: &mut Frame, app: &mut TuiApp) {
+fn draw(frame: &mut Frame, app: &TuiApp) {
     let size = frame.size();
 
     // Layout: [banner/chat area] [input area] [status bar]
@@ -313,8 +310,8 @@ fn draw(frame: &mut Frame, app: &mut TuiApp) {
         .split(size);
 
     draw_chat_area(frame, app, chunks[0]);
-    draw_input_area(frame, &app, chunks[1]);
-    draw_status_bar(frame, &app, chunks[2]);
+    draw_input_area(frame, app, chunks[1]);
+    draw_status_bar(frame, app, chunks[2]);
 
     // Draw preview overlay if in preview mode
     if app.input_mode == InputMode::Preview {
@@ -322,7 +319,7 @@ fn draw(frame: &mut Frame, app: &mut TuiApp) {
     }
 }
 
-fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
+fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Welcome banner (first time)
@@ -450,22 +447,16 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
 
     let total_lines = lines.len() as u16;
     let visible = area.height.saturating_sub(2);
-    let max_scroll = total_lines.saturating_sub(visible);
-
-    // Store for scroll clamping in key handler
-    app.scroll_height = max_scroll;
-
-    // Clamp scroll_offset to valid range
-    if app.scroll_offset > max_scroll {
-        app.scroll_offset = max_scroll;
-    }
-
-    let scroll = max_scroll.saturating_sub(app.scroll_offset);
+    let scroll = if total_lines > visible {
+        total_lines - visible
+    } else {
+        0
+    };
 
     let chat = Paragraph::new(Text::from(lines))
         .block(Block::default().borders(Borders::ALL).title(" Helix Agent "))
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
+        .scroll((scroll.saturating_sub(app.scroll_offset), 0));
 
     frame.render_widget(chat, area);
 }
@@ -517,28 +508,7 @@ fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let char_count = app.input.value().len();
     let ml_count = app.multiline_buffer.len();
 
-    // Build dynamic status text with TTFT tracking
-    let status_display = if app.is_generating {
-        if let Some(locked) = app.ttft_locked {
-            // First token received — show frozen TTFT alongside status
-            format!("{} [TTFT: {:.1}s]", app.status_text, locked.as_secs_f64())
-        } else if let Some(start) = app.ttft_start {
-            // Still waiting for first token — show live elapsed
-            let elapsed = start.elapsed();
-            format!("Thinking... ({:.1}s)", elapsed.as_secs_f64())
-        } else {
-            app.status_text.clone()
-        }
-    } else {
-        // Show TTFT from last generation if available
-        if let Some(locked) = app.ttft_locked {
-            format!("{} [last TTFT: {:.1}s]", app.status_text, locked.as_secs_f64())
-        } else {
-            app.status_text.clone()
-        }
-    };
-
-    let left = format!(" {} ", status_display);
+    let left = format!(" {} ", app.status_text);
     let right = format!(" chars: {} | lines: {} ", char_count, ml_count + 1);
 
     let bar_width = area.width as usize;
@@ -614,7 +584,7 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
 
         loop {
             // Draw
-            terminal.draw(|f| draw(f, &mut app)).expect("Failed to draw");
+            terminal.draw(|f| draw(f, &app)).expect("Failed to draw");
 
             // Poll for events (crossterm keyboard) or orchestrator events
             tokio::select! {
@@ -645,18 +615,12 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
                         TuiEvent::TokenChunk(chunk) => {
                             app.is_generating = true;
                             app.append_token_chunk(&chunk);
-                            // Auto-scroll to bottom when new content arrives
-                            app.scroll_offset = 0;
-                        }
-                        TuiEvent::GenerationStarted => {
-                            // Lock TTFT timer on first token
-                            if let Some(start) = app.ttft_start {
-                                app.ttft_locked = Some(start.elapsed());
-                            }
                         }
                         TuiEvent::ResponseDone => {
                             app.finalize_streaming();
                             app.is_generating = false;
+                            app.ttft_start = None;
+                            app.ttft_locked = None;
                             app.status_text = "Ready".to_string();
                         }
                         TuiEvent::ToolStart(info) => {
@@ -698,6 +662,22 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
                         }
                         TuiEvent::Status(text) => {
                             app.status_text = text;
+                        }
+                        TuiEvent::StatusUpdate(text) => {
+                            // Only update status text if TTFT hasn't locked yet
+                            if app.ttft_locked.is_none() {
+                                app.status_text = text;
+                            }
+                        }
+                        TuiEvent::GenerationStarted => {
+                            if let Some(start) = app.ttft_start {
+                                if app.ttft_locked.is_none() {
+                                    let duration = start.elapsed();
+                                    app.ttft_locked = Some(duration);
+                                    let secs = duration.as_secs_f32();
+                                    app.status_text = format!("Generating... [TTFT: {:.2}s]", secs);
+                                }
+                            }
                         }
                         TuiEvent::SystemMessage(msg) => {
                             app.chat_history.push(ChatEntry {
@@ -753,17 +733,18 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
         }
         InputMode::Normal => {
             match key.code {
-                // Ctrl+C = interrupt (if generating) or quit (if idle)
+                // Ctrl+C = interrupt generation or quit
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if app.is_generating {
                         let _ = action_tx.send(TuiAction::Interrupt);
                         app.status_text = "Interrupting...".to_string();
+                        return true; // Don't quit, just interrupt
                     } else {
                         let _ = action_tx.send(TuiAction::Quit);
                         return false;
                     }
                 }
-                // Ctrl+D = always quit
+                // Ctrl+D = quit
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let _ = action_tx.send(TuiAction::Quit);
                     return false;
@@ -821,28 +802,26 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
                     }
                 }
 
-                // Up = scroll chat (input empty) or history navigation (input has text)
+                // Up = scroll chat history if input empty; else history navigation
                 KeyCode::Up => {
                     if app.input.value().is_empty() && app.multiline_buffer.is_empty() {
-                        // Scroll chat up by 1 line
-                        app.scroll_offset = app.scroll_offset.saturating_add(1)
-                            .min(app.scroll_height);
+                        app.scroll_offset = app.scroll_offset.saturating_add(1);
                     } else if !app.command_history.is_empty() {
                         let idx = match app.history_index {
                             Some(0) => 0,
                             Some(i) => i - 1,
-                            None => app.command_history.len() - 1,
+                            None => app.command_history.len().saturating_sub(1),
                         };
                         app.history_index = Some(idx);
-                        let cmd = app.command_history[idx].clone();
-                        app.input = Input::new(cmd);
+                        if let Some(cmd) = app.command_history.get(idx) {
+                            app.input = Input::new(cmd.clone());
+                        }
                     }
                 }
 
-                // Down = scroll chat (input empty) or forward history (input has text)
+                // Down = scroll chat history if input empty; else forward history navigation
                 KeyCode::Down => {
                     if app.input.value().is_empty() && app.multiline_buffer.is_empty() {
-                        // Scroll chat down by 1 line
                         app.scroll_offset = app.scroll_offset.saturating_sub(1);
                     } else if let Some(idx) = app.history_index {
                         if idx + 1 < app.command_history.len() {
@@ -856,13 +835,12 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
                     }
                 }
 
-                // Scroll (always works regardless of input state)
+                // Scroll
                 KeyCode::PageUp => {
-                    app.scroll_offset = app.scroll_offset.saturating_add(10)
-                        .min(app.scroll_height);
+                    app.scroll_offset = app.scroll_offset.saturating_add(5);
                 }
                 KeyCode::PageDown => {
-                    app.scroll_offset = app.scroll_offset.saturating_sub(10);
+                    app.scroll_offset = app.scroll_offset.saturating_sub(5);
                 }
 
                 // All other keys → tui-input handler
