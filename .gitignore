@@ -22,3 +22,21 @@ CHAT_REAPPLY_CHANGE_LIST.md
 
 temp_init.json
 temp_config.json
+cold_run.exit
+cold_run.log
+update_milestone.py
+error.log
+error.txt
+init_map.json
+koboldcpp-linux-x64
+
+# Editor-local workspace settings
+.vscode/
+
+# Common local OS/editor noise
+.DS_Store
+*.swp
+*.swo
+
+# Active debug scratch notes (resolved artifacts can still be committed)
+.planning/debug/*.md

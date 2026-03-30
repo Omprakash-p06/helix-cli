@@ -1,35 +1,27 @@
 #![allow(dead_code)]
-use std::io;
-use std::time::{Instant, Duration};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap, Clear},
-    Frame, Terminal,
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use std::io;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
-use tokio::sync::mpsc;
 
 // ── Slash commands for autocomplete ──────────────────────────────────────────
 
 const SLASH_COMMANDS: &[&str] = &[
-    "/help",
-    "/quit",
-    "/exit",
-    "/clear",
-    "/save",
-    "/load",
-    "/history",
-    "/model",
-    "/mode",
+    "/help", "/quit", "/exit", "/clear", "/save", "/load", "/history", "/model", "/mode",
 ];
 
 // ── Application state ────────────────────────────────────────────────────────
@@ -81,6 +73,8 @@ pub enum TuiEvent {
     SystemMessage(String),
     /// Signals the start of actual token generation (locks TTFT).
     GenerationStarted,
+    // Visible heartbeat while model is streaming non-token/tool-only deltas.
+    StreamingHeartbeat(String),
     /// Updates the token context HUD (current_tokens, max_tokens).
     ContextUpdate(usize, usize),
     /// Wipe visual UI memory.
@@ -121,11 +115,14 @@ pub struct TuiApp {
     streaming_spans: Vec<ChatSpan>,
     /// Whether we are currently inside a <think> block.
     in_think_block: bool,
+    // Optional heartbeat line shown when generation has no visible token chunk yet.
+    streaming_heartbeat: Option<String>,
     /// Whether the model is currently generating.
     is_generating: bool,
     /// Toggle visibility of thinking blocks (Ctrl+T).
     show_thoughts: bool,
     scroll_offset: u16,
+    max_scroll_offset: u16,
     status_text: String,
     no_color: bool,
     command_history: Vec<String>,
@@ -148,9 +145,11 @@ impl TuiApp {
             streaming_content: String::new(),
             streaming_spans: Vec::new(),
             in_think_block: false,
+            streaming_heartbeat: None,
             is_generating: false,
             show_thoughts: true,
             scroll_offset: 0,
+            max_scroll_offset: 0,
             status_text: String::from("Ready"),
             no_color,
             command_history: Vec::new(),
@@ -163,19 +162,19 @@ impl TuiApp {
         }
     }
 
-fn get_formatted_cwd() -> String {
-    if let Ok(path) = std::env::current_dir() {
-        let mut path_str = path.to_string_lossy().to_string();
-        if let Ok(home) = std::env::var("HOME") {
-            if path_str.starts_with(&home) {
-                path_str = path_str.replacen(&home, "~", 1);
+    fn get_formatted_cwd() -> String {
+        if let Ok(path) = std::env::current_dir() {
+            let mut path_str = path.to_string_lossy().to_string();
+            if let Ok(home) = std::env::var("HOME") {
+                if path_str.starts_with(&home) {
+                    path_str = path_str.replacen(&home, "~", 1);
+                }
             }
+            path_str
+        } else {
+            "~".to_string()
         }
-        path_str
-    } else {
-        "~".to_string()
     }
-}
 
     /// Get ghost autocomplete suggestion based on current input.
     fn ghost_suggestion(&self) -> Option<String> {
@@ -226,6 +225,8 @@ fn get_formatted_cwd() -> String {
                 style: Style::default(),
             }],
         });
+        // Follow the latest message after submission so new responses stay visible.
+        self.scroll_offset = 0;
         Some(trimmed)
     }
 
@@ -237,6 +238,7 @@ fn get_formatted_cwd() -> String {
     /// Append a token chunk to streaming content, parsing <think>/</think> tags
     /// to build styled spans in real time.
     fn append_token_chunk(&mut self, chunk: &str) {
+        self.streaming_heartbeat = None;
         self.streaming_content.push_str(chunk);
 
         // Re-parse the entire streaming content into spans.
@@ -252,7 +254,9 @@ fn get_formatted_cwd() -> String {
         let think_style = if self.no_color {
             Style::default().add_modifier(Modifier::DIM)
         } else {
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM)
         };
 
         let content = self.streaming_content.clone();
@@ -304,7 +308,8 @@ fn get_formatted_cwd() -> String {
     fn finalize_streaming(&mut self) {
         if !self.streaming_content.is_empty() {
             // Strip <think>/</think> tags from the content string for plain-text fallback
-            let clean_content = self.streaming_content
+            let clean_content = self
+                .streaming_content
                 .replace("<think>", "")
                 .replace("</think>", "");
 
@@ -315,6 +320,7 @@ fn get_formatted_cwd() -> String {
             });
             self.streaming_content.clear();
             self.streaming_spans.clear();
+            self.streaming_heartbeat = None;
             self.in_think_block = false;
         }
     }
@@ -322,16 +328,16 @@ fn get_formatted_cwd() -> String {
 
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
-fn draw(frame: &mut Frame, app: &TuiApp) {
+fn draw(frame: &mut Frame, app: &mut TuiApp) {
     let size = frame.size();
 
     // Layout: [banner/chat area] [input area] [status bar]
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),       // chat area
-            Constraint::Length(3),    // input area
-            Constraint::Length(1),    // status bar
+            Constraint::Min(3),    // chat area
+            Constraint::Length(3), // input area
+            Constraint::Length(1), // status bar
         ])
         .split(size);
 
@@ -351,28 +357,59 @@ fn draw_help_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(" Help & Slash Commands ")
         .borders(Borders::ALL)
-        .style(Style::default().fg(if app.no_color { Color::Reset } else { Color::Cyan }));
+        .style(Style::default().fg(if app.no_color {
+            Color::Reset
+        } else {
+            Color::Cyan
+        }));
 
     let mut lines = vec![];
-    lines.push(Line::from(Span::styled("Keyboard Shortcuts:", Style::default().add_modifier(Modifier::BOLD))));
-    lines.push(Line::from("  Enter         : New line (in input) or submit (in preview)"));
-    lines.push(Line::from("  Alt+Enter     : Submit immediately / Run slash command"));
-    lines.push(Line::from("  Ctrl+C        : Interrupt generation, or quit if idle"));
+    lines.push(Line::from(Span::styled(
+        "Keyboard Shortcuts:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(
+        "  Enter         : New line (in input) or submit (in preview)",
+    ));
+    lines.push(Line::from(
+        "  Alt+Enter     : Submit immediately / Run slash command",
+    ));
+    lines.push(Line::from(
+        "  Ctrl+C        : Interrupt generation, or quit if idle",
+    ));
     lines.push(Line::from("  Ctrl+D        : Quit"));
-    lines.push(Line::from("  Ctrl+T        : Toggle internal <think> block visibility"));
+    lines.push(Line::from(
+        "  Ctrl+T        : Toggle internal <think> block visibility",
+    ));
     lines.push(Line::from("  Tab           : Accept ghost autocomplete"));
-    lines.push(Line::from("  Up/Down       : Scroll chat (if input empty), else history"));
+    lines.push(Line::from(
+        "  Up/Down       : Scroll chat (if input empty), else history",
+    ));
     lines.push(Line::from("  PageUp/Down   : Scroll chat history"));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Slash Commands:", Style::default().add_modifier(Modifier::BOLD))));
+    lines.push(Line::from(Span::styled(
+        "Slash Commands:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
     lines.push(Line::from("  /help         : Show this help screen"));
-    lines.push(Line::from("  /clear        : Wipe chat & context history entirely"));
+    lines.push(Line::from(
+        "  /clear        : Wipe chat & context history entirely",
+    ));
+    lines.push(Line::from("  /mode status  : Show current execution mode"));
+    lines.push(Line::from(
+        "  /mode <name>  : Switch mode (`chat` or `agentic`)",
+    ));
     lines.push(Line::from("  /quit, /exit  : Exit application"));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Press any key to dismiss.", Style::default().add_modifier(Modifier::DIM))));
+    lines.push(Line::from(Span::styled(
+        "Press any key to dismiss.",
+        Style::default().add_modifier(Modifier::DIM),
+    )));
 
-    let paragraph = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
-    
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: false });
+
     // Centered rect
     let popup_area = Rect {
         x: area.width.saturating_sub(60) / 2,
@@ -380,35 +417,134 @@ fn draw_help_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
         width: 60.min(area.width),
         height: 20.min(area.height),
     };
-    
+
     frame.render_widget(Clear, popup_area);
     frame.render_widget(paragraph, popup_area);
 }
 
-fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
-    let mut lines: Vec<Line> = Vec::new();
+fn is_think_span(chat_span: &ChatSpan) -> bool {
+    chat_span.style.add_modifier == Modifier::DIM || (chat_span.style.fg == Some(Color::DarkGray))
+}
+
+fn push_multiline_plain_entry(
+    lines: &mut Vec<Line<'static>>,
+    prefix: &str,
+    prefix_style: Style,
+    content: &str,
+) {
+    let continuation_prefix = " ".repeat(prefix.chars().count());
+    let mut segments = content.split('\n');
+
+    if let Some(first_segment) = segments.next() {
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, first_segment),
+            prefix_style,
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(prefix.to_string(), prefix_style)));
+    }
+
+    for segment in segments {
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", continuation_prefix, segment),
+            prefix_style,
+        )));
+    }
+}
+
+fn push_multiline_spans_entry(
+    lines: &mut Vec<Line<'static>>,
+    prefix: &str,
+    prefix_style: Style,
+    spans: &[ChatSpan],
+    show_thoughts: bool,
+) {
+    let continuation_prefix = " ".repeat(prefix.chars().count());
+    let mut current_spans: Vec<Span<'static>> =
+        vec![Span::styled(prefix.to_string(), prefix_style)];
+    let mut has_visible_content = false;
+
+    for chat_span in spans {
+        if !show_thoughts && is_think_span(chat_span) {
+            continue;
+        }
+
+        let mut remaining = chat_span.text.as_str();
+        loop {
+            if let Some(newline_idx) = remaining.find('\n') {
+                let segment = &remaining[..newline_idx];
+                if !segment.is_empty() {
+                    current_spans.push(Span::styled(segment.to_string(), chat_span.style));
+                    has_visible_content = true;
+                }
+                lines.push(Line::from(std::mem::take(&mut current_spans)));
+                current_spans.push(Span::raw(continuation_prefix.clone()));
+                remaining = &remaining[(newline_idx + 1)..];
+            } else {
+                if !remaining.is_empty() {
+                    current_spans.push(Span::styled(remaining.to_string(), chat_span.style));
+                    has_visible_content = true;
+                }
+                break;
+            }
+        }
+    }
+
+    if has_visible_content {
+        lines.push(Line::from(current_spans));
+    }
+}
+
+fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Welcome banner (first time)
     if app.chat_history.is_empty() && !app.is_generating {
         let banner_style = if app.no_color {
             Style::default()
         } else {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         };
-        lines.push(Line::from(Span::styled("██╗  ██╗███████╗██╗     ██╗██╗  ██╗", banner_style)));
-        lines.push(Line::from(Span::styled("██║  ██║██╔════╝██║     ██║╚██╗██╔╝", banner_style)));
-        lines.push(Line::from(Span::styled("███████║█████╗  ██║     ██║ ╚███╔╝ ", banner_style)));
-        lines.push(Line::from(Span::styled("██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ", banner_style)));
-        lines.push(Line::from(Span::styled("██║  ██║███████╗███████╗██║██╔╝ ██╗", banner_style)));
-        lines.push(Line::from(Span::styled("╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝", banner_style)));
+        lines.push(Line::from(Span::styled(
+            "██╗  ██╗███████╗██╗     ██╗██╗  ██╗",
+            banner_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "██║  ██║██╔════╝██║     ██║╚██╗██╔╝",
+            banner_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "███████║█████╗  ██║     ██║ ╚███╔╝ ",
+            banner_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ",
+            banner_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "██║  ██║███████╗███████╗██║██╔╝ ██╗",
+            banner_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝",
+            banner_style,
+        )));
         lines.push(Line::from(""));
         let subtitle_style = if app.no_color {
             Style::default()
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        lines.push(Line::from(Span::styled("Py + Rust Hybrid Agent Stack", subtitle_style)));
-        lines.push(Line::from(Span::styled("Type a prompt to begin. Enter = newline, Alt+Enter = submit.", subtitle_style)));
+        lines.push(Line::from(Span::styled(
+            "Py + Rust Hybrid Agent Stack",
+            subtitle_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "Type a prompt to begin. Enter = newline, Alt+Enter = submit.",
+            subtitle_style,
+        )));
         lines.push(Line::from(""));
     }
 
@@ -419,7 +555,9 @@ fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
                 let s = if app.no_color {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
                 };
                 ("▶ You: ", s)
             }
@@ -460,19 +598,15 @@ fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
         // Use spans if available (for assistant entries with think blocks)
         if !entry.spans.is_empty() && entry.role == "assistant" {
-            let mut line_spans: Vec<Span> = vec![Span::styled(prefix, prefix_style)];
-            for chat_span in &entry.spans {
-                // Skip think-block spans if show_thoughts is false
-                let is_think = chat_span.style.add_modifier == Modifier::DIM
-                    || (chat_span.style.fg == Some(Color::DarkGray));
-                if !app.show_thoughts && is_think {
-                    continue;
-                }
-                line_spans.push(Span::styled(chat_span.text.clone(), chat_span.style));
-            }
-            lines.push(Line::from(line_spans));
+            push_multiline_spans_entry(
+                &mut lines,
+                prefix,
+                prefix_style,
+                &entry.spans,
+                app.show_thoughts,
+            );
         } else {
-            lines.push(Line::from(Span::styled(format!("{}{}", prefix, entry.content), prefix_style)));
+            push_multiline_plain_entry(&mut lines, prefix, prefix_style, &entry.content);
         }
         lines.push(Line::from(""));
     }
@@ -485,23 +619,20 @@ fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
             } else {
                 Style::default().fg(Color::Blue)
             };
-            let mut line_spans: Vec<Span> = vec![Span::styled("◆ Helix: ", prefix_style)];
-            for chat_span in &app.streaming_spans {
-                let is_think = chat_span.style.add_modifier == Modifier::DIM
-                    || (chat_span.style.fg == Some(Color::DarkGray));
-                if !app.show_thoughts && is_think {
-                    continue;
-                }
-                line_spans.push(Span::styled(chat_span.text.clone(), chat_span.style));
-            }
-            lines.push(Line::from(line_spans));
+            push_multiline_spans_entry(
+                &mut lines,
+                "◆ Helix: ",
+                prefix_style,
+                &app.streaming_spans,
+                app.show_thoughts,
+            );
         } else {
             let style = if app.no_color {
                 Style::default()
             } else {
                 Style::default().fg(Color::Blue)
             };
-            lines.push(Line::from(Span::styled(format!("◆ Helix: {}", app.streaming_content), style)));
+            push_multiline_plain_entry(&mut lines, "◆ Helix: ", style, &app.streaming_content);
         }
         let indicator = if app.no_color {
             Style::default()
@@ -509,6 +640,20 @@ fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
             Style::default().fg(Color::DarkGray)
         };
         lines.push(Line::from(Span::styled("  ▍generating...", indicator)));
+    } else if app.is_generating {
+        if let Some(heartbeat) = &app.streaming_heartbeat {
+            let style = if app.no_color {
+                Style::default().add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("◆ Helix: {}", heartbeat),
+                style,
+            )));
+        }
     }
 
     let total_lines = lines.len() as u16;
@@ -518,9 +663,17 @@ fn draw_chat_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         0
     };
+    app.max_scroll_offset = scroll;
+    if app.scroll_offset > app.max_scroll_offset {
+        app.scroll_offset = app.max_scroll_offset;
+    }
 
     let chat = Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL).title(format!(" Helix Agent • ⌂ {} ", app.cwd)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Helix Agent • ⌂ {} ", app.cwd)),
+        )
         .wrap(Wrap { trim: false })
         .scroll((scroll.saturating_sub(app.scroll_offset), 0));
 
@@ -559,13 +712,17 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
         ));
     }
 
-    let input_widget = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::ALL).title(" Input (Enter=newline, Alt+Enter=submit) "));
+    let input_widget = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Input (Enter=newline, Alt+Enter=submit) "),
+    );
 
     frame.render_widget(input_widget, area);
 
     // Cursor position
-    let cursor_x = area.x + 1 + multiline_indicator.len() as u16 + 2 + app.input.visual_cursor() as u16;
+    let cursor_x =
+        area.x + 1 + multiline_indicator.len() as u16 + 2 + app.input.visual_cursor() as u16;
     let cursor_y = area.y + 1;
     frame.set_cursor(cursor_x, cursor_y);
 }
@@ -574,7 +731,10 @@ fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let char_count = app.input.value().len();
     let ml_count = app.multiline_buffer.len();
 
-    let left = format!(" {} | Context: [{} / {}] ", app.status_text, app.current_tokens, app.max_tokens);
+    let left = format!(
+        " {} | Context: [{} / {}] ",
+        app.status_text, app.current_tokens, app.max_tokens
+    );
     let right = format!(" chars: {} | lines: {} ", char_count, ml_count + 1);
 
     let bar_width = area.width as usize;
@@ -598,12 +758,19 @@ fn draw_preview_overlay(frame: &mut Frame, _app: &TuiApp, area: Rect) {
 
     let preview = Paragraph::new(Text::from(vec![
         Line::from(""),
-        Line::from(Span::styled("  Send this message?", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "  Send this message?",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
         Line::from("  [Enter] Confirm    [Esc] Cancel"),
         Line::from(""),
     ]))
-    .block(Block::default().borders(Borders::ALL).title(" Command Preview "));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Command Preview "),
+    );
 
     frame.render_widget(preview, popup_area);
 }
@@ -628,13 +795,23 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+fn truncate_preview_preserving_utf8(input: &str, max_chars: usize) -> String {
+    match input.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", &input[..idx]),
+        None => input.to_string(),
+    }
+}
+
 // ── TUI runner ───────────────────────────────────────────────────────────────
 
 /// Run the TUI event loop. Returns channels for communication with the orchestrator.
 ///
 /// - `action_rx`: orchestrator reads user actions (Submit / Quit) from this.
 /// - `event_tx`: orchestrator sends streaming events (Token, ToolCall, etc.) to this.
-pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::UnboundedSender<TuiEvent>)> {
+pub async fn run_tui() -> io::Result<(
+    mpsc::UnboundedReceiver<TuiAction>,
+    mpsc::UnboundedSender<TuiEvent>,
+)> {
     let (action_tx, action_rx) = mpsc::unbounded_channel::<TuiAction>();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
 
@@ -650,7 +827,9 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
 
         loop {
             // Draw
-            terminal.draw(|f| draw(f, &app)).expect("Failed to draw");
+            terminal
+                .draw(|f| draw(f, &mut app))
+                .expect("Failed to draw");
 
             // Poll for events (crossterm keyboard) or orchestrator events
             tokio::select! {
@@ -685,6 +864,7 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
                         TuiEvent::ResponseDone => {
                             app.finalize_streaming();
                             app.is_generating = false;
+                            app.streaming_heartbeat = None;
                             app.ttft_start = None;
                             app.ttft_locked = None;
                             app.status_text = "Ready".to_string();
@@ -707,11 +887,7 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
                         }
                         TuiEvent::ToolResult(result) => {
                             let icon = if result.success { "✓" } else { "✗" };
-                            let truncated = if result.output.len() > 200 {
-                                format!("{}...", &result.output[..200])
-                            } else {
-                                result.output.clone()
-                            };
+                            let truncated = truncate_preview_preserving_utf8(&result.output, 200);
                             let content = format!("{} {} → {}", icon, result.name, truncated);
                             app.chat_history.push(ChatEntry {
                                 role: "tool".to_string(),
@@ -745,12 +921,18 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
                                 }
                             }
                         }
+                        TuiEvent::StreamingHeartbeat(text) => {
+                            app.is_generating = true;
+                            app.streaming_heartbeat = Some(text);
+                        }
                         TuiEvent::ContextUpdate(current, max) => {
                             app.current_tokens = current;
                             app.max_tokens = max;
                         }
                         TuiEvent::ClearHistory => {
                             app.chat_history.clear();
+                            app.scroll_offset = 0;
+                            app.max_scroll_offset = 0;
                         }
                         TuiEvent::SystemMessage(msg) => {
                             app.chat_history.push(ChatEntry {
@@ -773,10 +955,8 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
 
         // Cleanup terminal
         disable_raw_mode().expect("Failed to disable raw mode");
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen
-        ).expect("Failed to leave alternate screen");
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)
+            .expect("Failed to leave alternate screen");
         terminal.show_cursor().expect("Failed to show cursor");
     });
 
@@ -784,30 +964,32 @@ pub async fn run_tui() -> io::Result<(mpsc::UnboundedReceiver<TuiAction>, mpsc::
 }
 
 /// Handle a key event. Returns false if the app should quit.
-fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::UnboundedSender<TuiAction>) -> bool {
+fn handle_key_event(
+    app: &mut TuiApp,
+    key: KeyEvent,
+    action_tx: &mpsc::UnboundedSender<TuiAction>,
+) -> bool {
     match app.input_mode {
         InputMode::Help => {
             // Any key leaves help mode.
             app.input_mode = InputMode::Normal;
         }
-        InputMode::Preview => {
-            match key.code {
-                KeyCode::Enter => {
-                    app.input_mode = InputMode::Normal;
-                    if let Some(text) = app.submit_input() {
-                        let _ = action_tx.send(TuiAction::Submit(text));
-                        app.status_text = "Generating...".to_string();
-                        app.is_generating = true;
-                        app.ttft_start = Some(Instant::now());
-                        app.ttft_locked = None;
-                    }
+        InputMode::Preview => match key.code {
+            KeyCode::Enter => {
+                app.input_mode = InputMode::Normal;
+                if let Some(text) = app.submit_input() {
+                    let _ = action_tx.send(TuiAction::Submit(text));
+                    app.status_text = "Generating...".to_string();
+                    app.is_generating = true;
+                    app.ttft_start = Some(Instant::now());
+                    app.ttft_locked = None;
                 }
-                KeyCode::Esc => {
-                    app.input_mode = InputMode::Normal;
-                }
-                _ => {}
             }
-        }
+            KeyCode::Esc => {
+                app.input_mode = InputMode::Normal;
+            }
+            _ => {}
+        },
         InputMode::Normal => {
             match key.code {
                 // Ctrl+C = interrupt generation or quit
@@ -889,7 +1071,10 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
                 // Up = scroll chat history if input empty; else history navigation
                 KeyCode::Up => {
                     if app.input.value().is_empty() && app.multiline_buffer.is_empty() {
-                        app.scroll_offset = app.scroll_offset.saturating_add(1);
+                        app.scroll_offset = app
+                            .scroll_offset
+                            .saturating_add(1)
+                            .min(app.max_scroll_offset);
                     } else if !app.command_history.is_empty() {
                         let idx = match app.history_index {
                             Some(0) => 0,
@@ -921,7 +1106,10 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
 
                 // Scroll
                 KeyCode::PageUp => {
-                    app.scroll_offset = app.scroll_offset.saturating_add(5);
+                    app.scroll_offset = app
+                        .scroll_offset
+                        .saturating_add(5)
+                        .min(app.max_scroll_offset);
                 }
                 KeyCode::PageDown => {
                     app.scroll_offset = app.scroll_offset.saturating_sub(5);
@@ -937,4 +1125,81 @@ fn handle_key_event(app: &mut TuiApp, key: KeyEvent, action_tx: &mpsc::Unbounded
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TuiApp, handle_key_event, truncate_preview_preserving_utf8};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tokio::sync::mpsc;
+    use tui_input::Input;
+
+    #[test]
+    fn truncates_ascii_preview_with_ellipsis() {
+        let input = "a".repeat(250);
+        let output = truncate_preview_preserving_utf8(&input, 200);
+        assert!(output.ends_with("..."));
+        assert_eq!(output.chars().count(), 203);
+    }
+
+    #[test]
+    fn truncates_unicode_preview_without_breaking_char_boundaries() {
+        let input = "│".repeat(250);
+        let output = truncate_preview_preserving_utf8(&input, 200);
+        assert!(output.ends_with("..."));
+        assert_eq!(output.chars().count(), 203);
+        assert!(output.starts_with("│││"));
+    }
+
+    #[test]
+    fn leaves_short_preview_unchanged() {
+        let input = "short │ output";
+        assert_eq!(truncate_preview_preserving_utf8(input, 200), input);
+    }
+
+    #[test]
+    fn submit_resets_scroll_offset_to_latest() {
+        let mut app = TuiApp::new();
+        app.scroll_offset = 7;
+        app.input = Input::new("hello".to_string());
+
+        let submitted = app.submit_input();
+
+        assert_eq!(submitted.as_deref(), Some("hello"));
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn up_scroll_respects_max_scroll_offset() {
+        let mut app = TuiApp::new();
+        app.max_scroll_offset = 2;
+        app.scroll_offset = 2;
+        let (action_tx, _action_rx) = mpsc::unbounded_channel();
+
+        let keep_running = handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &action_tx,
+        );
+
+        assert!(keep_running);
+        assert_eq!(app.scroll_offset, 2);
+    }
+
+    #[test]
+    fn down_scroll_moves_towards_latest_response() {
+        let mut app = TuiApp::new();
+        app.max_scroll_offset = 10;
+        app.scroll_offset = 3;
+        let (action_tx, _action_rx) = mpsc::unbounded_channel();
+
+        let keep_running = handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &action_tx,
+        );
+
+        assert!(keep_running);
+        assert_eq!(app.scroll_offset, 2);
+    }
 }

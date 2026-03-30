@@ -169,9 +169,7 @@ pub fn execute_run_terminal_command(
         p.arg("-c").arg(&cmd);
         p
     };
-    let output = process
-        .current_dir(get_allowed_dir())
-        .output();
+    let output = process.current_dir(get_allowed_dir()).output();
 
     match output {
         Ok(out) => {
@@ -196,7 +194,10 @@ pub fn execute_run_terminal_command(
 
             // Cap output — always tail so last error lines are preserved
             let result = tail_truncate(&raw, CMD_OUTPUT_MAX_CHARS);
-            ToolResult { success, output: result }
+            ToolResult {
+                success,
+                output: result,
+            }
         }
         Err(e) => ToolResult {
             success: false,
@@ -208,7 +209,12 @@ pub fn execute_run_terminal_command(
 pub fn execute_read_file(input: ReadFileInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
-        Err(e) => return ToolResult { success: false, output: e },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                output: e,
+            };
+        }
     };
 
     println!("Reading: {}", resolved_path.display());
@@ -219,11 +225,18 @@ pub fn execute_read_file(input: ReadFileInput) -> ToolResult {
                 let truncated: String = chars[..READ_FILE_MAX_CHARS].iter().collect();
                 let output = format!(
                     "{}\n\n[Rust Orchestrator] File truncated at {READ_FILE_MAX_CHARS} chars ({} total). Use search_codebase or a targeted read for deeper context.",
-                    truncated, chars.len()
+                    truncated,
+                    chars.len()
                 );
-                ToolResult { success: true, output }
+                ToolResult {
+                    success: true,
+                    output,
+                }
             } else {
-                ToolResult { success: true, output: content }
+                ToolResult {
+                    success: true,
+                    output: content,
+                }
             }
         }
         Err(e) => ToolResult {
@@ -236,7 +249,12 @@ pub fn execute_read_file(input: ReadFileInput) -> ToolResult {
 pub fn execute_write_file(input: WriteFileInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
-        Err(e) => return ToolResult { success: false, output: e },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                output: e,
+            };
+        }
     };
 
     println!("Writing: {}", resolved_path.display());
@@ -264,7 +282,12 @@ pub fn execute_write_file(input: WriteFileInput) -> ToolResult {
 pub fn execute_append_file(input: AppendFileInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
-        Err(e) => return ToolResult { success: false, output: e },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                output: e,
+            };
+        }
     };
 
     println!("Appending to: {}", resolved_path.display());
@@ -278,18 +301,20 @@ pub fn execute_append_file(input: AppendFileInput) -> ToolResult {
     }
 
     use std::io::Write;
-    match std::fs::OpenOptions::new().create(true).append(true).open(&resolved_path) {
-        Ok(mut file) => {
-            match file.write_all(input.content.as_bytes()) {
-                Ok(_) => ToolResult {
-                    success: true,
-                    output: format!("Successfully appended to {}", resolved_path.display()),
-                },
-                Err(e) => ToolResult {
-                    success: false,
-                    output: format!("Error appending to file: {}", e),
-                },
-            }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&resolved_path)
+    {
+        Ok(mut file) => match file.write_all(input.content.as_bytes()) {
+            Ok(_) => ToolResult {
+                success: true,
+                output: format!("Successfully appended to {}", resolved_path.display()),
+            },
+            Err(e) => ToolResult {
+                success: false,
+                output: format!("Error appending to file: {}", e),
+            },
         },
         Err(e) => ToolResult {
             success: false,
@@ -301,7 +326,12 @@ pub fn execute_append_file(input: AppendFileInput) -> ToolResult {
 pub fn execute_list_directory(input: ListDirectoryInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
-        Err(e) => return ToolResult { success: false, output: e },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                output: e,
+            };
+        }
     };
 
     if !resolved_path.is_dir() {
@@ -315,8 +345,12 @@ pub fn execute_list_directory(input: ListDirectoryInput) -> ToolResult {
     let mut lines: Vec<String> = vec![format!("📁 {}/", resolved_path.display())];
 
     fn walk(dir: &Path, prefix: &str, depth: usize, lines: &mut Vec<String>) {
-        if depth > 2 { return; }
-        let Ok(mut entries) = fs::read_dir(dir) else { return; };
+        if depth > 2 {
+            return;
+        }
+        let Ok(mut entries) = fs::read_dir(dir) else {
+            return;
+        };
         let mut entries_vec: Vec<_> = entries.by_ref().flatten().collect();
         entries_vec.sort_by_key(|e| e.file_name());
 
@@ -324,23 +358,32 @@ pub fn execute_list_directory(input: ListDirectoryInput) -> ToolResult {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             // Skip hidden dirs and build artifacts
-            if name.starts_with('.') || name == "target" || name == "__pycache__" { continue; }
+            if name.starts_with('.') || name == "target" || name == "__pycache__" {
+                continue;
+            }
 
             if path.is_dir() {
                 lines.push(format!("{prefix}├── 📁 {name}/"));
                 walk(&path, &format!("{prefix}│   "), depth + 1, lines);
             } else {
                 let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-                let size_str = if size > 1024 * 1024 { format!("{:.1}MB", size as f64 / 1048576.0) }
-                               else if size > 1024 { format!("{:.1}KB", size as f64 / 1024.0) }
-                               else { format!("{size}B") };
+                let size_str = if size > 1024 * 1024 {
+                    format!("{:.1}MB", size as f64 / 1048576.0)
+                } else if size > 1024 {
+                    format!("{:.1}KB", size as f64 / 1024.0)
+                } else {
+                    format!("{size}B")
+                };
                 lines.push(format!("{prefix}├── 📄 {name} ({size_str})"));
             }
         }
     }
 
     walk(&resolved_path, "", 0, &mut lines);
-    ToolResult { success: true, output: lines.join("\n") }
+    ToolResult {
+        success: true,
+        output: lines.join("\n"),
+    }
 }
 
 pub fn execute_get_system_stats() -> ToolResult {
@@ -349,15 +392,19 @@ pub fn execute_get_system_stats() -> ToolResult {
     let total_memory = sys.total_memory() / 1024 / 1024;
     let used_memory = sys.used_memory() / 1024 / 1024;
     let cpus = sys.cpus();
-    let cpu_usage: f32 = if cpus.is_empty() { 0.0 } else { cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32 };
+    let cpu_usage: f32 = if cpus.is_empty() {
+        0.0
+    } else {
+        cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32
+    };
     let os_name = System::name().unwrap_or_else(|| "Unknown".to_string());
     let uptime_secs = System::uptime();
-    
+
     let stats = format!(
         "OS: {}\nUptime: {}s\nRAM: {}MB / {}MB\nCPU Global Load: {:.2}%",
         os_name, uptime_secs, used_memory, total_memory, cpu_usage
     );
-    
+
     ToolResult {
         success: true,
         output: stats,

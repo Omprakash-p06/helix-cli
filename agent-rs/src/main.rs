@@ -102,21 +102,109 @@ fn format_visible_output(text: &str, is_chat_mode: bool) -> String {
     }
 }
 
-fn extract_visible_delta_text(delta: &Value, is_chat_mode: bool) -> Option<String> {
-    let keys: &[&str] = if is_chat_mode {
-        &["content", "text", "response"]
-    } else {
-        &["content", "reasoning_content", "text", "response"]
-    };
+fn extract_visible_delta_text(delta: &Value, _is_chat_mode: bool) -> Option<(String, bool)> {
+    let keys: &[(&str, bool)] = &[
+        ("content", false),
+        ("reasoning_content", true),
+        ("text", false),
+        ("response", false),
+    ];
 
-    for key in keys {
-        if let Some(value) = delta.get(key).and_then(|v| v.as_str()) {
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
+    for (key, is_reasoning) in keys {
+        if let Some(value) = delta.get(*key).and_then(|v| v.as_str()) {
+            return Some((value.to_string(), *is_reasoning));
         }
     }
     None
+}
+
+fn extract_visible_message_or_choice_text(node: &Value) -> Option<(String, bool)> {
+    let keys: &[(&str, bool)] = &[
+        ("content", false),
+        ("reasoning_content", true),
+        ("text", false),
+        ("response", false),
+    ];
+
+    for (key, is_reasoning) in keys {
+        if let Some(value) = node.get(*key).and_then(|v| v.as_str()) {
+            return Some((value.to_string(), *is_reasoning));
+        }
+    }
+
+    None
+}
+
+fn extract_visible_stream_choice_text(
+    choice: &Value,
+    is_chat_mode: bool,
+) -> Option<(String, bool)> {
+    if let Some(delta) = choice.get("delta") {
+        if let Some(result) = extract_visible_delta_text(delta, is_chat_mode) {
+            return Some(result);
+        }
+    }
+
+    if let Some(result) = extract_visible_message_or_choice_text(choice) {
+        return Some(result);
+    }
+
+    if let Some(message) = choice.get("message") {
+        if let Some(result) = extract_visible_message_or_choice_text(message) {
+            return Some(result);
+        }
+    }
+
+    None
+}
+
+fn extract_stream_tool_calls<'a>(choice: &'a Value) -> Option<&'a Vec<Value>> {
+    if let Some(delta_calls) = choice
+        .get("delta")
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|t| t.as_array())
+    {
+        return Some(delta_calls);
+    }
+
+    if let Some(choice_calls) = choice.get("tool_calls").and_then(|t| t.as_array()) {
+        return Some(choice_calls);
+    }
+
+    choice
+        .get("message")
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|t| t.as_array())
+}
+
+fn should_retry_non_stream_after_stream_error(full_content: &str, tool_calls_count: usize) -> bool {
+    full_content.is_empty() && tool_calls_count == 0
+}
+
+fn should_replay_final_content(
+    generation_started_sent: bool,
+    message_content: Option<&str>,
+) -> bool {
+    !generation_started_sent
+        && message_content
+            .map(|content| !content.is_empty())
+            .unwrap_or(false)
+}
+
+fn should_enable_tool_grammar(is_chat_mode: bool, server_flavor: ServerFlavor) -> bool {
+    if is_chat_mode {
+        return false;
+    }
+
+    if let Ok(raw) = std::env::var("HELIX_FORCE_TOOL_GRAMMAR") {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => return true,
+            "0" | "false" | "no" | "off" => return false,
+            _ => {}
+        }
+    }
+
+    server_flavor == ServerFlavor::KoboldCpp
 }
 
 fn flush_token_buffer(
@@ -231,6 +319,46 @@ fn read_gpu_layer_hint() -> String {
         "Config values: GPU_LAYERS={}, FALLBACK_GPU_LAYERS={}",
         gpu_layers, fallback_gpu_layers
     )
+}
+
+fn system_prompt_for_mode(exec_mode: &str, persona: &str) -> String {
+    if exec_mode != "agentic" {
+        return String::new();
+    }
+
+    match persona {
+        "coder" => {
+            "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
+                .to_string()
+        }
+        "researcher" => {
+            "You are an autonomous read-only system explorer. You read files and gather system stats using provided tools. You cannot modify files or execute commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
+                .to_string()
+        }
+        _ => {
+            "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise. You have local tool access through these tools, so do not ask the user to run local file-system commands when a tool can do it."
+                .to_string()
+        }
+    }
+}
+
+fn sync_system_prompt_message(messages: &mut Vec<ChatMessage>, system_prompt: &str) {
+    if matches!(messages.first(), Some(msg) if msg.role == "system") {
+        messages.remove(0);
+    }
+
+    if !system_prompt.is_empty() {
+        messages.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: Some(system_prompt.to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        );
+    }
 }
 
 fn chat_max_tokens() -> usize {
@@ -454,11 +582,7 @@ async fn send_with_recovery(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading configuration from python runtime...");
     let app_config = config::AppConfig::load_from_python()?;
-    let client = Client::builder()
-        .no_gzip()
-        .no_brotli()
-        .no_deflate()
-        .build()?;
+    let client = Client::builder().user_agent("HelixAgent/0.1.0").build()?;
 
     /*
     println!("\n[RAG] Booting FastEmbed Semantic Knowledge Base... (this may take a moment)");
@@ -467,14 +591,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     */
 
     let persona = std::env::var("AGENT_PERSONA").unwrap_or_else(|_| "os_assistant".to_string());
-    let is_chat_mode = app_config.exec_mode == "chat";
+    let mut exec_mode = app_config.exec_mode.clone();
+    let mut is_chat_mode = exec_mode == "chat";
     let url = format!(
         "{}/chat/completions",
         app_config.base_url.trim_end_matches('/')
     );
     let server_flavor = detect_server_flavor(&client, &app_config.base_url).await;
     let strict_tools = server_flavor != ServerFlavor::KoboldCpp;
-    let tools_payload = if is_chat_mode {
+    let mut tools_payload = if is_chat_mode {
         json!([])
     } else {
         build_tools(&persona, strict_tools)?
@@ -485,28 +610,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let generated_grammar = if !is_chat_mode {
+    let mut generated_grammar = if should_enable_tool_grammar(is_chat_mode, server_flavor) {
         println!("[Runtime] Compiling JSON schemata to GBNF Grammar...");
         tools::generate_tool_grammar(&tools_payload)
     } else {
         String::new()
     };
+    if !is_chat_mode && generated_grammar.is_empty() {
+        println!("[Runtime] Tool grammar disabled for this backend; using native tool-calling.");
+    }
 
-    let system_prompt = if app_config.exec_mode != "agentic" {
-        ""
-    } else {
-        match persona.as_str() {
-            "coder" => {
-                "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
-            }
-            "researcher" => {
-                "You are an autonomous read-only system explorer. You read files and gather system stats using provided tools. You cannot modify files or execute commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
-            }
-            _ => {
-                "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise."
-            }
-        }
-    };
+    let mut system_prompt = system_prompt_for_mode(&exec_mode, &persona);
 
     let ui_mode = std::env::var("HELIX_UI_MODE").unwrap_or_else(|_| "terminal".to_string());
 
@@ -523,16 +637,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut messages = vec![];
-
-    if !system_prompt.is_empty() {
-        messages.push(ChatMessage {
-            role: "system".to_string(),
-            content: Some(system_prompt.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
-    }
+    sync_system_prompt_message(&mut messages, &system_prompt);
 
     let args: Vec<String> = std::env::args().collect();
     let mut initial_prompt = args
@@ -554,6 +659,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             current_tokens,
             app_config.context_size as usize,
         ));
+        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+            "[Mode] {} mode active. Use `/mode chat` or `/mode agentic`.",
+            exec_mode
+        )));
 
         // If there's an initial prompt, send it immediately
         if let Some(prompt) = initial_prompt.take() {
@@ -617,7 +726,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(tui::TuiAction::SystemCommand(cmd)) => {
                     let c = cmd.trim();
                     if c == "/clear" {
-                        messages.truncate(1); // Keep the system prompt
+                        if matches!(messages.first(), Some(msg) if msg.role == "system") {
+                            messages.truncate(1);
+                        } else {
+                            messages.clear();
+                        }
                         let _ = event_tx.send(tui::TuiEvent::ClearHistory);
                         let _ = event_tx.send(tui::TuiEvent::SystemMessage(
                             "[Context Cleared]".to_string(),
@@ -627,6 +740,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             current_tokens,
                             app_config.context_size as usize,
                         ));
+                    } else if c.starts_with("/mode") {
+                        let parts: Vec<&str> = c.split_whitespace().collect();
+
+                        if parts.len() == 1
+                            || (parts.len() == 2 && parts[1].eq_ignore_ascii_case("status"))
+                        {
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                "[Mode] Current mode: {}. Use `/mode chat` or `/mode agentic`.",
+                                exec_mode
+                            )));
+                            continue;
+                        }
+
+                        if parts.len() != 2 {
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                "[Mode] Usage: /mode chat | /mode agentic | /mode status"
+                                    .to_string(),
+                            ));
+                            continue;
+                        }
+
+                        let requested_mode = parts[1].to_lowercase();
+                        if requested_mode != "chat" && requested_mode != "agentic" {
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                "[Mode] Unknown mode. Use `chat` or `agentic`.".to_string(),
+                            ));
+                            continue;
+                        }
+
+                        if requested_mode == exec_mode {
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                "[Mode] Already in {} mode.",
+                                exec_mode
+                            )));
+                            continue;
+                        }
+
+                        exec_mode = requested_mode;
+                        is_chat_mode = exec_mode == "chat";
+                        tools_payload = if is_chat_mode {
+                            json!([])
+                        } else {
+                            match build_tools(&persona, strict_tools) {
+                                Ok(payload) => payload,
+                                Err(err) => {
+                                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                        "[Mode] Failed to initialize tools: {}",
+                                        err
+                                    )));
+                                    continue;
+                                }
+                            }
+                        };
+
+                        let grammar_enabled =
+                            should_enable_tool_grammar(is_chat_mode, server_flavor);
+                        generated_grammar = if grammar_enabled {
+                            tools::generate_tool_grammar(&tools_payload)
+                        } else {
+                            String::new()
+                        };
+                        if !is_chat_mode && !grammar_enabled {
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                "[Mode] Tool grammar is disabled for this backend; using native tool-calling. Set HELIX_FORCE_TOOL_GRAMMAR=1 to force grammar.".to_string(),
+                            ));
+                        }
+
+                        system_prompt = system_prompt_for_mode(&exec_mode, &persona);
+                        sync_system_prompt_message(&mut messages, &system_prompt);
+                        let current_tokens = tokens::count_message_tokens(&messages);
+                        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
+                            current_tokens,
+                            app_config.context_size as usize,
+                        ));
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                            "[Mode] Switched to {} mode.",
+                            exec_mode
+                        )));
                     } else {
                         let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
                             "[Unknown command] {}",
@@ -827,65 +1018,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         json.get("choices").and_then(|c| c.as_array())
                                     {
                                         if let Some(choice) = choices.first() {
-                                            if let Some(delta) = choice.get("delta") {
-                                                if let Some(content) =
-                                                    extract_visible_delta_text(delta, is_chat_mode)
-                                                {
-                                                    if !is_chat_mode {
-                                                        print!("{}", content);
-                                                        std::io::stdout().flush().unwrap();
-                                                    }
-                                                    full_content.push_str(&content);
+                                            if let Some((content, _)) =
+                                                extract_visible_stream_choice_text(
+                                                    choice,
+                                                    is_chat_mode,
+                                                )
+                                            {
+                                                if !is_chat_mode {
+                                                    print!("{}", content);
+                                                    std::io::stdout().flush().unwrap();
                                                 }
-                                                if let Some(tcs) = delta
-                                                    .get("tool_calls")
-                                                    .and_then(|t| t.as_array())
-                                                {
-                                                    for tc in tcs {
-                                                        if let Some(index) =
-                                                            tc.get("index").and_then(|i| i.as_u64())
+                                                full_content.push_str(&content);
+                                            }
+                                            if let Some(tcs) = extract_stream_tool_calls(choice) {
+                                                for tc in tcs {
+                                                    if let Some(index) =
+                                                        tc.get("index").and_then(|i| i.as_u64())
+                                                    {
+                                                        let idx = index as usize;
+                                                        let entry = tool_calls_map.entry(idx).or_insert(json!({
+                                                            "id": "",
+                                                            "type": "function",
+                                                            "function": { "name": "", "arguments": "" }
+                                                        }));
+                                                        if let Some(id) =
+                                                            tc.get("id").and_then(|id| id.as_str())
                                                         {
-                                                            let idx = index as usize;
-                                                            let entry = tool_calls_map.entry(idx).or_insert(json!({
-                                                                "id": "",
-                                                                "type": "function",
-                                                                "function": { "name": "", "arguments": "" }
-                                                            }));
-                                                            if let Some(id) = tc
-                                                                .get("id")
-                                                                .and_then(|id| id.as_str())
+                                                            entry["id"] = json!(id);
+                                                        }
+                                                        if let Some(func) = tc.get("function") {
+                                                            if let Some(name) = func
+                                                                .get("name")
+                                                                .and_then(|n| n.as_str())
                                                             {
-                                                                entry["id"] = json!(id);
+                                                                let current =
+                                                                    entry["function"]["name"]
+                                                                        .as_str()
+                                                                        .unwrap_or("");
+                                                                entry["function"]["name"] = json!(
+                                                                    format!("{}{}", current, name)
+                                                                );
                                                             }
-                                                            if let Some(func) = tc.get("function") {
-                                                                if let Some(name) = func
-                                                                    .get("name")
-                                                                    .and_then(|n| n.as_str())
-                                                                {
-                                                                    let current = entry["function"]
-                                                                        ["name"]
+                                                            if let Some(args) = func
+                                                                .get("arguments")
+                                                                .and_then(|a| a.as_str())
+                                                            {
+                                                                let current =
+                                                                    entry["function"]["arguments"]
                                                                         .as_str()
                                                                         .unwrap_or("");
-                                                                    entry["function"]["name"] =
-                                                                        json!(format!(
-                                                                            "{}{}",
-                                                                            current, name
-                                                                        ));
-                                                                }
-                                                                if let Some(args) = func
-                                                                    .get("arguments")
-                                                                    .and_then(|a| a.as_str())
-                                                                {
-                                                                    let current = entry["function"]
-                                                                        ["arguments"]
-                                                                        .as_str()
-                                                                        .unwrap_or("");
-                                                                    entry["function"]["arguments"] =
-                                                                        json!(format!(
-                                                                            "{}{}",
-                                                                            current, args
-                                                                        ));
-                                                                }
+                                                                entry["function"]["arguments"] = json!(
+                                                                    format!("{}{}", current, args)
+                                                                );
                                                             }
                                                         }
                                                     }
@@ -898,9 +1082,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        println!("\n[Rust] Stream error: {}", e);
                         had_stream_error = true;
-                        if full_content.is_empty() && tool_calls_map.is_empty() {
+                        if should_retry_non_stream_after_stream_error(
+                            &full_content,
+                            tool_calls_map.len(),
+                        ) {
+                            println!("\n[Rust] Stream error: {}", e);
                             let mut fallback_body = request_body.clone();
                             fallback_body["stream"] = json!(false);
                             if let Ok(fallback_res) =
@@ -957,56 +1144,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(json) = serde_json::from_str::<Value>(&data) {
                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                             if let Some(choice) = choices.first() {
-                                if let Some(delta) = choice.get("delta") {
-                                    if let Some(content) =
-                                        extract_visible_delta_text(delta, is_chat_mode)
-                                    {
-                                        if !is_chat_mode {
-                                            print!("{}", content);
-                                            std::io::stdout().flush().unwrap();
-                                        }
-                                        full_content.push_str(&content);
+                                if let Some((content, _)) =
+                                    extract_visible_stream_choice_text(choice, is_chat_mode)
+                                {
+                                    if !is_chat_mode {
+                                        print!("{}", content);
+                                        std::io::stdout().flush().unwrap();
                                     }
-                                    if let Some(tcs) =
-                                        delta.get("tool_calls").and_then(|t| t.as_array())
-                                    {
-                                        for tc in tcs {
-                                            if let Some(index) =
-                                                tc.get("index").and_then(|i| i.as_u64())
+                                    full_content.push_str(&content);
+                                }
+                                if let Some(tcs) = extract_stream_tool_calls(choice) {
+                                    for tc in tcs {
+                                        if let Some(index) =
+                                            tc.get("index").and_then(|i| i.as_u64())
+                                        {
+                                            let idx = index as usize;
+                                            let entry =
+                                                tool_calls_map.entry(idx).or_insert(json!({
+                                                    "id": "",
+                                                    "type": "function",
+                                                    "function": { "name": "", "arguments": "" }
+                                                }));
+                                            if let Some(id) =
+                                                tc.get("id").and_then(|id| id.as_str())
                                             {
-                                                let idx = index as usize;
-                                                let entry =
-                                                    tool_calls_map.entry(idx).or_insert(json!({
-                                                        "id": "",
-                                                        "type": "function",
-                                                        "function": { "name": "", "arguments": "" }
-                                                    }));
-                                                if let Some(id) =
-                                                    tc.get("id").and_then(|id| id.as_str())
+                                                entry["id"] = json!(id);
+                                            }
+                                            if let Some(func) = tc.get("function") {
+                                                if let Some(name) =
+                                                    func.get("name").and_then(|n| n.as_str())
                                                 {
-                                                    entry["id"] = json!(id);
+                                                    let current = entry["function"]["name"]
+                                                        .as_str()
+                                                        .unwrap_or("");
+                                                    entry["function"]["name"] =
+                                                        json!(format!("{}{}", current, name));
                                                 }
-                                                if let Some(func) = tc.get("function") {
-                                                    if let Some(name) =
-                                                        func.get("name").and_then(|n| n.as_str())
-                                                    {
-                                                        let current = entry["function"]["name"]
-                                                            .as_str()
-                                                            .unwrap_or("");
-                                                        entry["function"]["name"] =
-                                                            json!(format!("{}{}", current, name));
-                                                    }
-                                                    if let Some(args) = func
-                                                        .get("arguments")
-                                                        .and_then(|a| a.as_str())
-                                                    {
-                                                        let current =
-                                                            entry["function"]["arguments"]
-                                                                .as_str()
-                                                                .unwrap_or("");
-                                                        entry["function"]["arguments"] =
-                                                            json!(format!("{}{}", current, args));
-                                                    }
+                                                if let Some(args) =
+                                                    func.get("arguments").and_then(|a| a.as_str())
+                                                {
+                                                    let current = entry["function"]["arguments"]
+                                                        .as_str()
+                                                        .unwrap_or("");
+                                                    entry["function"]["arguments"] =
+                                                        json!(format!("{}{}", current, args));
                                                 }
                                             }
                                         }
@@ -1045,7 +1226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(visible)
             };
 
-            if is_chat_mode && full_content.is_empty() {
+            if full_content.is_empty() {
                 if let Some(fallback_msg) = &message_content {
                     print!("{}", fallback_msg);
                     std::io::stdout().flush().unwrap();
@@ -1339,6 +1520,7 @@ async fn run_llm_loop_tui(
         let mut sse_parser = stream::SseParser::new();
         let mut had_stream_error = false;
         let mut generation_started_sent = false;
+        let mut in_reasoning_block = false;
         let mut last_heartbeat = std::time::Instant::now();
 
         // 30ms batch flushing for token streaming
@@ -1369,38 +1551,49 @@ async fn run_llm_loop_tui(
                                     if let Ok(json) = serde_json::from_str::<Value>(&data) {
                                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                                             if let Some(choice) = choices.first() {
-                                                if let Some(delta) = choice.get("delta") {
-                                                    if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
-                                                        if !generation_started_sent {
-                                                            generation_started_sent = true;
-                                                            let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
-                                                        }
-                                                        full_content.push_str(&content);
-                                                        if !is_chat_mode {
-                                                            token_buffer.push_str(&content);
-                                                        }
+                                                if let Some((content, is_reasoning)) =
+                                                    extract_visible_stream_choice_text(choice, is_chat_mode)
+                                                {
+                                                    if !generation_started_sent {
+                                                        generation_started_sent = true;
+                                                        let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
                                                     }
-                                                    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-                                                        for tc in tcs {
-                                                            if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
-                                                                let idx = index as usize;
-                                                                let entry = tool_calls_map.entry(idx).or_insert(json!({
-                                                                    "id": "",
-                                                                    "type": "function",
-                                                                    "function": { "name": "", "arguments": "" }
-                                                                }));
-                                                                if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
-                                                                    entry["id"] = json!(id);
+
+                                                    if is_reasoning && !in_reasoning_block {
+                                                        in_reasoning_block = true;
+                                                        full_content.push_str("<think>");
+                                                        token_buffer.push_str("<think>");
+                                                        let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Thinking...".to_string()));
+                                                    } else if !is_reasoning && in_reasoning_block {
+                                                        in_reasoning_block = false;
+                                                        full_content.push_str("</think>\n\n");
+                                                        token_buffer.push_str("</think>\n\n");
+                                                        let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Generating...".to_string()));
+                                                    }
+
+                                                    full_content.push_str(&content);
+                                                    token_buffer.push_str(&content);
+                                                }
+                                                if let Some(tcs) = extract_stream_tool_calls(choice) {
+                                                    for tc in tcs {
+                                                        if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                                            let idx = index as usize;
+                                                            let entry = tool_calls_map.entry(idx).or_insert(json!({
+                                                                "id": "",
+                                                                "type": "function",
+                                                                "function": { "name": "", "arguments": "" }
+                                                            }));
+                                                            if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
+                                                                entry["id"] = json!(id);
+                                                            }
+                                                            if let Some(func) = tc.get("function") {
+                                                                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                                                    let current = entry["function"]["name"].as_str().unwrap_or("");
+                                                                    entry["function"]["name"] = json!(format!("{}{}", current, name));
                                                                 }
-                                                                if let Some(func) = tc.get("function") {
-                                                                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                                                                        let current = entry["function"]["name"].as_str().unwrap_or("");
-                                                                        entry["function"]["name"] = json!(format!("{}{}", current, name));
-                                                                    }
-                                                                    if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
-                                                                        let current = entry["function"]["arguments"].as_str().unwrap_or("");
-                                                                        entry["function"]["arguments"] = json!(format!("{}{}", current, args));
-                                                                    }
+                                                                if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
+                                                                    let current = entry["function"]["arguments"].as_str().unwrap_or("");
+                                                                    entry["function"]["arguments"] = json!(format!("{}{}", current, args));
                                                                 }
                                                             }
                                                         }
@@ -1414,10 +1607,13 @@ async fn run_llm_loop_tui(
                         }
                         Some(Err(e)) => {
                             had_stream_error = true;
-                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                                format!("[Stream error] {}", e)
-                            ));
-                            if full_content.is_empty() && tool_calls_map.is_empty() {
+                            if should_retry_non_stream_after_stream_error(
+                                &full_content,
+                                tool_calls_map.len(),
+                            ) {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                    format!("[Stream error] {}", e)
+                                ));
                                 let _ = event_tx.send(tui::TuiEvent::SystemMessage(
                                     "[Recovery] Retrying without stream...".to_string()
                                 ));
@@ -1472,38 +1668,49 @@ async fn run_llm_loop_tui(
                                     if let Ok(json) = serde_json::from_str::<Value>(&data) {
                                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                                             if let Some(choice) = choices.first() {
-                                                if let Some(delta) = choice.get("delta") {
-                                                    if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
-                                                        if !generation_started_sent {
-                                                            generation_started_sent = true;
-                                                            let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
-                                                        }
-                                                        full_content.push_str(&content);
-                                                        if !is_chat_mode {
-                                                            token_buffer.push_str(&content);
-                                                        }
+                                                if let Some((content, is_reasoning)) =
+                                                    extract_visible_stream_choice_text(choice, is_chat_mode)
+                                                {
+                                                    if !generation_started_sent {
+                                                        generation_started_sent = true;
+                                                        let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
                                                     }
-                                                    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-                                                        for tc in tcs {
-                                                            if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
-                                                                let idx = index as usize;
-                                                                let entry = tool_calls_map.entry(idx).or_insert(json!({
-                                                                    "id": "",
-                                                                    "type": "function",
-                                                                    "function": { "name": "", "arguments": "" }
-                                                                }));
-                                                                if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
-                                                                    entry["id"] = json!(id);
+
+                                                    if is_reasoning && !in_reasoning_block {
+                                                        in_reasoning_block = true;
+                                                        full_content.push_str("<think>");
+                                                        token_buffer.push_str("<think>");
+                                                        let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Thinking...".to_string()));
+                                                    } else if !is_reasoning && in_reasoning_block {
+                                                        in_reasoning_block = false;
+                                                        full_content.push_str("</think>\n\n");
+                                                        token_buffer.push_str("</think>\n\n");
+                                                        let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Generating...".to_string()));
+                                                    }
+
+                                                    full_content.push_str(&content);
+                                                    token_buffer.push_str(&content);
+                                                }
+                                                if let Some(tcs) = extract_stream_tool_calls(choice) {
+                                                    for tc in tcs {
+                                                        if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                                            let idx = index as usize;
+                                                            let entry = tool_calls_map.entry(idx).or_insert(json!({
+                                                                "id": "",
+                                                                "type": "function",
+                                                                "function": { "name": "", "arguments": "" }
+                                                            }));
+                                                            if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
+                                                                entry["id"] = json!(id);
+                                                            }
+                                                            if let Some(func) = tc.get("function") {
+                                                                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                                                    let current = entry["function"]["name"].as_str().unwrap_or("");
+                                                                    entry["function"]["name"] = json!(format!("{}{}", current, name));
                                                                 }
-                                                                if let Some(func) = tc.get("function") {
-                                                                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                                                                        let current = entry["function"]["name"].as_str().unwrap_or("");
-                                                                        entry["function"]["name"] = json!(format!("{}{}", current, name));
-                                                                    }
-                                                                    if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
-                                                                        let current = entry["function"]["arguments"].as_str().unwrap_or("");
-                                                                        entry["function"]["arguments"] = json!(format!("{}{}", current, args));
-                                                                    }
+                                                                if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
+                                                                    let current = entry["function"]["arguments"].as_str().unwrap_or("");
+                                                                    entry["function"]["arguments"] = json!(format!("{}{}", current, args));
                                                                 }
                                                             }
                                                         }
@@ -1557,13 +1764,11 @@ async fn run_llm_loop_tui(
             Some(format_visible_output(&full_content, is_chat_mode))
         };
 
-        if is_chat_mode {
-            if let Some(content) = &message_content {
-                if !content.is_empty() {
-                    let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
-                    let _ = event_tx.send(tui::TuiEvent::TokenChunk(content.clone()));
-                }
-            }
+        if should_replay_final_content(generation_started_sent, message_content.as_deref()) {
+            let _ = event_tx.send(tui::TuiEvent::GenerationStarted);
+            let _ = event_tx.send(tui::TuiEvent::TokenChunk(
+                message_content.clone().unwrap_or_default(),
+            ));
         }
 
         let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() {
@@ -1706,7 +1911,11 @@ async fn run_llm_loop_tui(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_visible_delta_text, flush_token_buffer, format_visible_output};
+    use super::{
+        extract_stream_tool_calls, extract_visible_delta_text, extract_visible_stream_choice_text,
+        flush_token_buffer, format_visible_output, should_replay_final_content,
+        should_retry_non_stream_after_stream_error,
+    };
     use serde_json::json;
     use tokio::sync::mpsc;
 
@@ -1715,14 +1924,17 @@ mod tests {
         let delta = json!({"reasoning_content": "hello-from-reasoning"});
         assert_eq!(
             extract_visible_delta_text(&delta, false),
-            Some("hello-from-reasoning".to_string())
+            Some(("hello-from-reasoning".to_string(), true))
         );
     }
 
     #[test]
-    fn chat_mode_ignores_reasoning_content_chunks() {
+    fn chat_mode_marks_reasoning_content_chunks() {
         let delta = json!({"reasoning_content": "hidden"});
-        assert_eq!(extract_visible_delta_text(&delta, true), None);
+        assert_eq!(
+            extract_visible_delta_text(&delta, true),
+            Some(("hidden".to_string(), true))
+        );
     }
 
     #[test]
@@ -1730,8 +1942,45 @@ mod tests {
         let delta = json!({"content": "primary", "text": "secondary"});
         assert_eq!(
             extract_visible_delta_text(&delta, true),
-            Some("primary".to_string())
+            Some(("primary".to_string(), false))
         );
+    }
+
+    #[test]
+    fn extracts_choice_text_when_delta_is_missing() {
+        let choice = json!({"text": "plain-choice-text"});
+        assert_eq!(
+            extract_visible_stream_choice_text(&choice, false),
+            Some(("plain-choice-text".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn extracts_message_content_when_choice_uses_message_shape() {
+        let choice = json!({"message": {"content": "message-content"}});
+        assert_eq!(
+            extract_visible_stream_choice_text(&choice, false),
+            Some(("message-content".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn extracts_tool_calls_from_choice_message_when_delta_missing() {
+        let choice = json!({
+            "message": {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "function": { "name": "list_directory", "arguments": "{}" }
+                    }
+                ]
+            }
+        });
+
+        let tool_calls = extract_stream_tool_calls(&choice).expect("expected tool calls");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], json!("call_1"));
     }
 
     #[test]
@@ -1766,6 +2015,25 @@ mod tests {
     fn format_visible_output_exposes_reasoning_in_agentic_mode() {
         let input = "a <think>work</think> b";
         assert!(format_visible_output(input, false).contains("<thinking>"));
+    }
+
+    #[test]
+    fn retries_non_stream_only_when_no_stream_content_or_tools_exist() {
+        assert!(should_retry_non_stream_after_stream_error("", 0));
+        assert!(!should_retry_non_stream_after_stream_error("partial", 0));
+        assert!(!should_retry_non_stream_after_stream_error("", 1));
+    }
+
+    #[test]
+    fn does_not_replay_final_content_after_stream_started() {
+        assert!(!should_replay_final_content(true, Some("hello")));
+    }
+
+    #[test]
+    fn replays_final_content_only_for_non_stream_recovery_case() {
+        assert!(should_replay_final_content(false, Some("hello")));
+        assert!(!should_replay_final_content(false, Some("")));
+        assert!(!should_replay_final_content(false, None));
     }
 }
 

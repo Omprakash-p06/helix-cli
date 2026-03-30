@@ -14,16 +14,16 @@ pub fn count_message_tokens(messages: &[ChatMessage]) -> usize {
     for msg in messages {
         // Count role text
         total_tokens += count_tokens(&msg.role);
-        
+
         // Count content text
         if let Some(content) = &msg.content {
             total_tokens += count_tokens(content);
         }
-        
+
         // Add 5 rough tokens per structural metadata boundaries (role/name keys, etc.)
         total_tokens += 5;
     }
-    
+
     // Add additional base overhead padding
     total_tokens + 10
 }

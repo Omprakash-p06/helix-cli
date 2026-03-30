@@ -130,8 +130,6 @@ Plans:
 
 ---
 
----
-
 ## [x] Phase 6: Memory Management & Fallback
 **Goal:** Optimize hardware resource utilization by aggressively clearing VRAM and implementing iGPU fallback.
 *   **Requirements:** PERF-01, PERF-03

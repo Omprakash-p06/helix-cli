@@ -1,10 +1,10 @@
-use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::Editor;
+use rustyline::Helper;
+use rustyline::completion::Completer;
+use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::completion::Completer;
-use rustyline::Helper;
-use rustyline::Editor;
-use rustyline::error::ReadlineError;
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 
 /// Multi-line input helper.
 /// Rules:
@@ -32,7 +32,8 @@ impl Validator for MultiLineHelper {
     }
 }
 
-pub fn create_editor() -> Result<Editor<MultiLineHelper, rustyline::history::FileHistory>, ReadlineError> {
+pub fn create_editor()
+-> Result<Editor<MultiLineHelper, rustyline::history::FileHistory>, ReadlineError> {
     let config = rustyline::Config::builder()
         .auto_add_history(true)
         .bracketed_paste(true)
@@ -56,9 +57,7 @@ pub fn save_history(rl: &mut Editor<MultiLineHelper, rustyline::history::FileHis
 
 fn history_file_path() -> std::path::PathBuf {
     // Cross-platform: HOME on Linux/Mac, USERPROFILE on Windows
-    if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-    {
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         std::path::PathBuf::from(home).join(".helix_history")
     } else {
         std::path::PathBuf::from(".helix_history")

@@ -1,22 +1,22 @@
 use axum::{
+    Json, Router,
     extract::State,
     response::sse::{Event, Sse},
-    routing::{post, get},
-    Json, Router,
+    routing::{get, post},
 };
 use futures_util::stream::Stream;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::convert::Infallible;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
-use reqwest::Client;
-use serde_json::{json, Value};
 
-use crate::types::{ChatMessage, ChatResponse, ServerFlavor};
 use crate::config::AppConfig;
-use crate::tools::{self, ToolCallArgs};
 use crate::tokens;
+use crate::tools::{self, ToolCallArgs};
+use crate::types::{ChatMessage, ChatResponse, ServerFlavor};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -85,17 +85,28 @@ async fn chat_handler(
     let mut messages = payload.messages;
 
     tokio::spawn(async move {
-        let url = format!("{}/chat/completions", state.app_config.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            state.app_config.base_url.trim_end_matches('/')
+        );
         let mut round_trip_counter = 0;
-        let base_temperature: f64 = if state.server_flavor == ServerFlavor::KoboldCpp { 0.05 } else { 0.1 };
+        let base_temperature: f64 = if state.server_flavor == ServerFlavor::KoboldCpp {
+            0.05
+        } else {
+            0.1
+        };
         let mut temperature_override: f64 = base_temperature;
 
         loop {
             if round_trip_counter >= 20 {
-                let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                    r#type: "error".to_string(),
-                    content: "Safety exit: exceeded 20 action rounds.".to_string()
-                }).unwrap())).await;
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .json_data(AgentEventPayload {
+                            r#type: "error".to_string(),
+                            content: "Safety exit: exceeded 20 action rounds.".to_string(),
+                        })
+                        .unwrap()))
+                    .await;
                 break;
             }
             round_trip_counter += 1;
@@ -104,10 +115,14 @@ async fn chat_handler(
             let threshold = (state.app_config.context_size as f32 * 0.70) as usize;
 
             if current_tokens > threshold && messages.len() > 5 {
-                let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                    r#type: "system".to_string(),
-                    content: format!("Context at {} tokens. Compacting...", current_tokens)
-                }).unwrap())).await;
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .json_data(AgentEventPayload {
+                            r#type: "system".to_string(),
+                            content: format!("Context at {} tokens. Compacting...", current_tokens),
+                        })
+                        .unwrap()))
+                    .await;
 
                 let mid_point = 1 + ((messages.len() - 1) as f32 * 0.60) as usize;
                 let mut compaction_messages = vec![messages[0].clone()];
@@ -133,7 +148,10 @@ async fn chat_handler(
                                 let mut new_messages = vec![messages[0].clone()];
                                 new_messages.push(ChatMessage {
                                     role: "assistant".to_string(),
-                                    content: Some(format!("[Internal Working Memory Summary]\n{}", summary)),
+                                    content: Some(format!(
+                                        "[Internal Working Memory Summary]\n{}",
+                                        summary
+                                    )),
                                     tool_calls: None,
                                     tool_call_id: None,
                                     name: None,
@@ -155,19 +173,23 @@ async fn chat_handler(
             });
 
             if !state.generated_grammar.is_empty() {
-                request_body.as_object_mut().unwrap().insert(
-                    "grammar".to_string(),
-                    json!(state.generated_grammar)
-                );
+                request_body
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("grammar".to_string(), json!(state.generated_grammar));
             }
 
             let res = match state.client.post(&url).json(&request_body).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "error".to_string(),
-                        content: format!("HTTP Error: {}", e)
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "error".to_string(),
+                                content: format!("HTTP Error: {}", e),
+                            })
+                            .unwrap()))
+                        .await;
                     break;
                 }
             };
@@ -175,10 +197,14 @@ async fn chat_handler(
             let response_text = match res.text().await {
                 Ok(t) => t,
                 Err(e) => {
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "error".to_string(),
-                        content: format!("Read text error: {}", e)
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "error".to_string(),
+                                content: format!("Read text error: {}", e),
+                            })
+                            .unwrap()))
+                        .await;
                     break;
                 }
             };
@@ -186,10 +212,14 @@ async fn chat_handler(
             let response: ChatResponse = match serde_json::from_str(&response_text) {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "error".to_string(),
-                        content: format!("API Parsing Error: {}", e)
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "error".to_string(),
+                                content: format!("API Parsing Error: {}", e),
+                            })
+                            .unwrap()))
+                        .await;
                     break;
                 }
             };
@@ -207,10 +237,14 @@ async fn chat_handler(
                     crate::expose_think_blocks(content)
                 };
                 if !visible.is_empty() {
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "text".to_string(),
-                        content: visible.clone()
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "text".to_string(),
+                                content: visible.clone(),
+                            })
+                            .unwrap()))
+                        .await;
                 }
                 if message.tool_calls.is_none() {
                     temperature_override = base_temperature;
@@ -228,10 +262,14 @@ async fn chat_handler(
 
             if let Some(tool_calls) = &message.tool_calls {
                 if tool_calls.is_empty() {
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "done".to_string(),
-                        content: "".to_string()
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "done".to_string(),
+                                content: "".to_string(),
+                            })
+                            .unwrap()))
+                        .await;
                     break;
                 }
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
@@ -248,31 +286,40 @@ async fn chat_handler(
                         json!({})
                     };
 
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "tool_start".to_string(),
-                        content: format!("Executing {}...", func_name)
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "tool_start".to_string(),
+                                content: format!("Executing {}...", func_name),
+                            })
+                            .unwrap()))
+                        .await;
 
                     let simulated_payload = json!({
                         "name": func_name,
                         "arguments": parsed_args
                     });
 
-                    let tool_result = match serde_json::from_value::<ToolCallArgs>(simulated_payload) {
+                    let tool_result = match serde_json::from_value::<ToolCallArgs>(
+                        simulated_payload,
+                    ) {
                         Ok(ToolCallArgs::RunTerminalCommand(input)) => {
                             tools::execute_run_terminal_command(
                                 input,
                                 &state.app_config.dangerous_commands,
                                 state.app_config.require_confirmation,
                             )
-                        },
+                        }
                         Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
                         Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
                         Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
-                        Ok(ToolCallArgs::ListDirectory(input)) => tools::execute_list_directory(input),
+                        Ok(ToolCallArgs::ListDirectory(input)) => {
+                            tools::execute_list_directory(input)
+                        }
                         Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-                        Ok(ToolCallArgs::SearchCodebase(_)) => {
-                            tools::ToolResult { success: false, output: "Tool 'search_codebase' is currently disabled.".to_string() }
+                        Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
+                            success: false,
+                            output: "Tool 'search_codebase' is currently disabled.".to_string(),
                         },
                         Err(e) => {
                             let correction = format!(
@@ -281,8 +328,18 @@ async fn chat_handler(
                                 func_name, e
                             );
                             critic_injections.push(crate::critic_message(&correction));
-                            temperature_override = if state.server_flavor == ServerFlavor::KoboldCpp { 0.2 } else { 0.3 };
-                            tools::ToolResult { success: false, output: format!("[Schema mismatch — see correction directive above]") }
+                            temperature_override = if state.server_flavor == ServerFlavor::KoboldCpp
+                            {
+                                0.2
+                            } else {
+                                0.3
+                            };
+                            tools::ToolResult {
+                                success: false,
+                                output: format!(
+                                    "[Schema mismatch — see correction directive above]"
+                                ),
+                            }
                         }
                     };
 
@@ -290,7 +347,11 @@ async fn chat_handler(
                         critic_injections.push(crate::critic_message(
                             "The previous command failed. Analyze the error output above carefully. Correct your approach and retry now. Do NOT repeat the same command."
                         ));
-                        temperature_override = if state.server_flavor == ServerFlavor::KoboldCpp { 0.2 } else { 0.3 };
+                        temperature_override = if state.server_flavor == ServerFlavor::KoboldCpp {
+                            0.2
+                        } else {
+                            0.3
+                        };
                     }
 
                     if tool_result.success && func_name == "write_file" {
@@ -299,10 +360,21 @@ async fn chat_handler(
                         ));
                     }
 
-                    let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                        r#type: "tool_result".to_string(),
-                        content: format!("Result: {}", if tool_result.success { "Success" } else { "Failed" })
-                    }).unwrap())).await;
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .json_data(AgentEventPayload {
+                                r#type: "tool_result".to_string(),
+                                content: format!(
+                                    "Result: {}",
+                                    if tool_result.success {
+                                        "Success"
+                                    } else {
+                                        "Failed"
+                                    }
+                                ),
+                            })
+                            .unwrap()))
+                        .await;
 
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
@@ -315,10 +387,14 @@ async fn chat_handler(
                 messages.extend(critic_injections);
             } else {
                 // Final answer reached
-                let _ = tx.send(Ok(Event::default().json_data(AgentEventPayload {
-                    r#type: "done".to_string(),
-                    content: "".to_string()
-                }).unwrap())).await;
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .json_data(AgentEventPayload {
+                            r#type: "done".to_string(),
+                            content: "".to_string(),
+                        })
+                        .unwrap()))
+                    .await;
                 break;
             }
         }

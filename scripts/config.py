@@ -15,8 +15,8 @@ BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}/v1"
 KOBOLD_BIN = "koboldcpp-linux-x64"
 KOBOLDCPP_ARGS = ""
 
-# Performance (Tier 3/5 - Mid)
-GPU_LAYERS = 19
+# Performance (Tier 2/5 - Consumer 4GB VRAM)
+GPU_LAYERS = 16
 CONTEXT_SIZE = 8192
 CPU_THREADS = 6
 BATCH_SIZE = 512

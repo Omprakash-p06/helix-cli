@@ -11,17 +11,30 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 
 ---
 
-## Current Milestone: v1.1 Operational Upgrades
+## Current Milestone: v1.2 Chat Mode Polish & Streaming Reliability
 
-**Goal:** Improve inference reliability, hardware resource utilization, agent transparency, and developer UX.
+**Goal:** Chat mode produces direct, concise responses without visible reasoning. Streaming is live (token-by-token). Tool calling is non-blocking with parallel support.
 
 **Target features:**
-- Clear GPU memory (kill lingering processes) before booting agents.
-- Expose agent thoughts using `<thinking></thinking>` blocks.
-- Create automated testing for agentic tool call accuracy.
-- Prioritize fast TTFT and generation speed.
-- Implement dGPU to iGPU fallback if VRAM is exhausted.
-- Fix terminal input UX so Enter-on-empty is replaced with a standard submission.
+- Strict system prompt enforcement for chat mode (no reasoning visible)
+- Intent detection to branch between chat vs. agentic modes
+- Post-processing filter to strip thinking traces and clean output
+- Raw byte streaming with immediate token-by-token rendering
+- Non-blocking async tool execution
+- Parallel & multi-tool support with concurrent execution
+- Shared types crate and codebase cleanup (clippy-clean, no warnings)
+
+---
+
+## Completed Milestones
+
+### v1.1 Operational Upgrades (Phases 9-14)
+- ✓ Fixed terminal chat warning and optimized system prompt (Phase 9)
+- ✓ Built TUI foundation with ratatui, input, and ghost autocomplete (Phase 10)
+- ✓ Implemented output polish and streaming (Phase 11)
+- ✓ Added control/feedback with interrupts and TTFT tracking (Phase 12)
+- ✓ Added context and discoverability layers (Phase 13)
+- ✓ Fixed TUI missing output bug with SSE parser repair + UAT gap closure (Phase 14)
 
 ---
 
@@ -42,17 +55,25 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 
 ### Active
 
-- [ ] **PERF-01 (GPU Memory Clearing):** Aggressively clean VRAM/lingering engine processes before any boot.
-- [ ] **PERF-02 (Fast Responses):** Re-tune system args/context configs to prioritize highest tokens/sec.
-- [ ] **PERF-03 (iGPU Fallback):** Automatically transition to iGPU or Unified Memory if the dedicated GPU fails to allocate the model.
-- [ ] **UX-01 (Visible Thoughts):** Map internal `<think>` blocks to visible `<thinking></thinking>` UI segments.
-- [ ] **UX-02 (Terminal Input):** Remove the "double enter" submission logic in terminal in favor of standard single-Enter or Ctrl+D overrides for better UX.
-- [ ] **TEST-01 (Accuracy Profiling):** Build a dedicated script to test tool schemas against local models programmatically.
+- [ ] **CHAT-01 (Chat Mode Prompt):** Strict system prompt for chat mode enforcing concise, direct responses.
+- [ ] **CHAT-02 (Reasoning Filter):** Post-processing layer to strip thinking traces from chat mode output.
+- [ ] **STREAM-01 (Live Token Rendering):** No buffering; raw bytes read immediately and fed to terminal/TUI.
+- [ ] **STREAM-02 (Immediate Redraw):** Terminal flushes after each token. TUI redraws on every chunk.
+- [ ] **TOOL-01 (Non-blocking Tools):** Tool execution in async tasks without blocking UI.
+- [ ] **TOOL-02 (Parallel Execution):** Multiple tool calls in one turn executed concurrently.
+- [ ] **TOOL-03 (Tool Status UI):** Live status display for running tools in terminal and web UI.
+- [ ] **CODE-01 (Shared Types):** Extract common types into `agent_core` crate for reuse.
+- [ ] **CODE-02 (Tracing & Logging):** Structured logging for streaming delays and tool lifecycles.
+- [ ] **CODE-03 (Clippy Clean):** All code passes `cargo clippy` with zero warnings.
 
 ### Out of Scope
 
 - Cloud API endpoints handling primary cognitive loads (against the "local-first" philosophy).
 - Gradio or Streamlit interfaces (decided to focus on a proper fast modern frontend framework instead).
+- RAG / vector search (deferred post-v1.2).
+- Multi-agent coordination (deferred post-v1.2).
+- Persistent memory beyond session save/load (deferred post-v1.2).
+- Full Claude-like computer use (deferred post-v1.2).
 
 ---
 
@@ -65,7 +86,7 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 | Rich Terminal Rust Crate | A primary pain-point for CLI dev tools is raw text pasting. `rustyline` resolves this seamlessly. | Pending implementation |
 
 ---
-*Last updated: 2026-03-21 after initialization*
+*Last updated: 2026-03-29 — Milestone v1.2 initiated*
 
 ## Evolution
 

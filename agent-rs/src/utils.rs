@@ -134,24 +134,25 @@ fn strip_block_family(input: &str, open: &str, close: &str) -> String {
 
 fn strip_malformed_openers(input: &str, marker: &str) -> String {
     let mut out = String::new();
-    let mut i = 0;
-    let bytes = input.as_bytes();
+    let mut cursor = 0;
 
-    while i < bytes.len() {
-        if input[i..].starts_with(marker) {
-            let end_tag = input[i..].find('>').map(|p| i + p + 1);
-            if let Some(end) = end_tag {
-                i = end;
-            } else {
-                let end_line = input[i..].find('\n').map(|p| i + p).unwrap_or(bytes.len());
-                i = end_line;
-            }
-            continue;
+    while let Some(start_rel) = input[cursor..].find(marker) {
+        let start = cursor + start_rel;
+        out.push_str(&input[cursor..start]);
+
+        let after_marker = start + marker.len();
+        let remainder = &input[after_marker..];
+        if let Some(end_rel) = remainder.find('>') {
+            cursor = after_marker + end_rel + 1;
+        } else if let Some(line_end_rel) = remainder.find('\n') {
+            // Keep newline by stopping right before it so it is copied on the next iteration.
+            cursor = after_marker + line_end_rel;
+        } else {
+            cursor = input.len();
         }
-        out.push(bytes[i] as char);
-        i += 1;
     }
 
+    out.push_str(&input[cursor..]);
     out
 }
 
@@ -240,7 +241,10 @@ pub fn clean_chat_output(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_chat_output, deduplicate_consecutive_sentences, normalize_quotes, strip_reasoning_blocks};
+    use super::{
+        clean_chat_output, deduplicate_consecutive_sentences, normalize_quotes,
+        strip_reasoning_blocks,
+    };
 
     #[test]
     fn strips_think_family_blocks() {
@@ -255,9 +259,18 @@ mod tests {
     }
 
     #[test]
+    fn strips_malformed_markers_with_utf8_chars() {
+        let input = "Hello—world <think this broke\nstill visible";
+        assert_eq!(strip_reasoning_blocks(input), "Hello—world \nstill visible");
+    }
+
+    #[test]
     fn deduplicates_exact_consecutive_sentences_only() {
         let input = "Hello. Hello. hello. Hello.";
-        assert_eq!(deduplicate_consecutive_sentences(input), "Hello. hello. Hello.");
+        assert_eq!(
+            deduplicate_consecutive_sentences(input),
+            "Hello. hello. Hello."
+        );
     }
 
     #[test]
