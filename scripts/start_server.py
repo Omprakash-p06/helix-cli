@@ -24,6 +24,31 @@ except ImportError:
     sys.exit(1)
 
 
+def apply_runtime_overrides():
+    """Allow parent launchers to override backend/layer settings via env vars."""
+    backend = os.environ.get("HELIX_BACKEND_HINT", "").strip().lower()
+    if backend:
+        config.BACKEND_HINT = backend
+
+    gpu_layers = os.environ.get("HELIX_GPU_LAYERS", "").strip()
+    if gpu_layers:
+        try:
+            config.GPU_LAYERS = int(gpu_layers)
+        except ValueError:
+            pass
+
+    fallback_backend = os.environ.get("HELIX_FALLBACK_BACKEND_HINT", "").strip().lower()
+    if fallback_backend:
+        config.FALLBACK_BACKEND_HINT = fallback_backend
+
+    fallback_layers = os.environ.get("HELIX_FALLBACK_GPU_LAYERS", "").strip()
+    if fallback_layers:
+        try:
+            config.FALLBACK_GPU_LAYERS = int(fallback_layers)
+        except ValueError:
+            pass
+
+
 def resolve_runtime_model():
     model_path = os.environ.get("HELIX_MODEL_PATH", "").strip() or config.MODEL_PATH
     model_name = os.environ.get("HELIX_MODEL_NAME", "").strip() or getattr(config, "MODEL_NAME", os.path.basename(model_path))
@@ -92,7 +117,12 @@ def run_llama_server(model_path):
             return False
         print("  llama-server started. Press Ctrl+C to stop.")
         process.wait()
-        return True
+        if process.returncode == 0:
+            return True
+
+        # Non-zero exit usually means runtime crash (often VRAM OOM during decode).
+        print(f"  llama-server exited with code {process.returncode}.")
+        return False
     except Exception as e:
         print(f"  Error: {e}")
         return False
@@ -157,6 +187,7 @@ def main():
     parser.parse_args()
 
     model_name, model_path = resolve_runtime_model()
+    apply_runtime_overrides()
 
     print_helix_logo(animated=True, delay=0.015)
     print()
@@ -183,8 +214,12 @@ def main():
         with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
             err_content = f.read().lower()
             if "out of memory" in err_content or "failed to allocate" in err_content or "bad allocation" in err_content:
-                print("  [!] VRAM OOM detected! Falling back to iGPU/System RAM...")
-                config.GPU_LAYERS = getattr(config, "FALLBACK_GPU_LAYERS", 0)
+                print("  [!] VRAM OOM detected! Switching to safe fallback settings...")
+                fallback_layers = getattr(config, "FALLBACK_GPU_LAYERS", 0)
+                fallback_backend = getattr(config, "FALLBACK_BACKEND_HINT", "cpu")
+                config.GPU_LAYERS = fallback_layers
+                config.BACKEND_HINT = fallback_backend
+                print(f"  [i] Fallback backend={fallback_backend}, GPU_LAYERS={fallback_layers}")
                 if run_llama_server(model_path):
                     print("Server shutdown gracefully.")
                     sys.exit(0)

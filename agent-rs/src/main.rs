@@ -1,22 +1,27 @@
 mod config;
-mod tools;
-mod tokens;
 mod input;
-pub mod types;
 mod server;
 mod stream;
+mod tokens;
+mod tools;
 mod tui;
+pub mod types;
 mod utils;
 
 use reqwest::Client;
-use schemars::schema_for;
-use serde_json::{json, Value};
 use rustyline::error::ReadlineError;
+use schemars::schema_for;
+use serde_json::{Value, json};
 use std::thread;
 use std::time::Duration;
 use tools::ToolCallArgs;
 
 pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};
+
+static TUI_HTTP_CONNECT_FAILS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+static MODEL_SERVER_BOOT_ATTEMPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn critic_message(text: &str) -> ChatMessage {
     ChatMessage {
@@ -124,6 +129,327 @@ fn flush_token_buffer(
     }
 }
 
+fn read_server_stderr_log() -> Option<String> {
+    let candidates = [
+        "logs/start_server.stderr.log",
+        "../logs/start_server.stderr.log",
+    ];
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if !content.trim().is_empty() {
+                    return Some(content);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn latest_oom_excerpt() -> Option<String> {
+    let content = read_server_stderr_log()?;
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut hit_idx: Option<usize> = None;
+    for (idx, line) in lines.iter().enumerate().rev() {
+        let lower = line.to_lowercase();
+        if lower.contains("out of memory")
+            || lower.contains("cuda error")
+            || lower.contains("failed to allocate")
+            || lower.contains("bad allocation")
+        {
+            hit_idx = Some(idx);
+            break;
+        }
+    }
+
+    let idx = hit_idx?;
+    let start = idx.saturating_sub(2);
+    let end = std::cmp::min(lines.len(), idx + 3);
+    let excerpt = lines[start..end].join("\n");
+    if excerpt.trim().is_empty() {
+        None
+    } else {
+        Some(excerpt)
+    }
+}
+
+fn read_config_layer_values() -> (Option<String>, Option<String>) {
+    let candidates = ["scripts/config.py", "../scripts/config.py"];
+    for path in candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let mut gpu_layers: Option<String> = None;
+            let mut fallback_gpu_layers: Option<String> = None;
+
+            for raw in content.lines() {
+                let line = raw.trim();
+                if line.starts_with('#') {
+                    continue;
+                }
+
+                if gpu_layers.is_none() && line.starts_with("GPU_LAYERS") {
+                    if let Some((_, rhs)) = line.split_once('=') {
+                        gpu_layers =
+                            Some(rhs.trim().trim_matches('"').trim_matches('\'').to_string());
+                    }
+                }
+
+                if fallback_gpu_layers.is_none() && line.starts_with("FALLBACK_GPU_LAYERS") {
+                    if let Some((_, rhs)) = line.split_once('=') {
+                        fallback_gpu_layers =
+                            Some(rhs.trim().trim_matches('"').trim_matches('\'').to_string());
+                    }
+                }
+            }
+
+            if gpu_layers.is_some() || fallback_gpu_layers.is_some() {
+                return (gpu_layers, fallback_gpu_layers);
+            }
+        }
+    }
+
+    (None, None)
+}
+
+fn read_gpu_layer_hint() -> String {
+    let (config_gpu_layers, config_fallback_layers) = read_config_layer_values();
+
+    let gpu_layers = std::env::var("GPU_LAYERS")
+        .ok()
+        .or(config_gpu_layers)
+        .unwrap_or_else(|| "unset".to_string());
+
+    let fallback_gpu_layers = std::env::var("FALLBACK_GPU_LAYERS")
+        .ok()
+        .or(config_fallback_layers)
+        .unwrap_or_else(|| "0 (default)".to_string());
+
+    format!(
+        "Config values: GPU_LAYERS={}, FALLBACK_GPU_LAYERS={}",
+        gpu_layers, fallback_gpu_layers
+    )
+}
+
+fn chat_max_tokens() -> usize {
+    std::env::var("HELIX_CHAT_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(128)
+}
+
+async fn send_with_retry(
+    client: &Client,
+    url: &str,
+    request_body: &Value,
+    max_attempts: usize,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let attempts = std::cmp::max(1, max_attempts);
+    let retry_delay_ms = std::env::var("HELIX_HTTP_RETRY_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1000);
+    let mut last_err: Option<reqwest::Error> = None;
+
+    for attempt in 1..=attempts {
+        match client.post(url).json(request_body).send().await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                let retryable = is_transient_http_error(&err);
+                if attempt < attempts && retryable {
+                    tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
+                    continue;
+                }
+                last_err = Some(err);
+                break;
+            }
+        }
+    }
+
+    Err(last_err.expect("send_with_retry called without attempts"))
+}
+
+fn is_transient_http_error(err: &reqwest::Error) -> bool {
+    if err.is_connect() || err.is_timeout() {
+        return true;
+    }
+
+    let msg = err.to_string().to_lowercase();
+    msg.contains("connection reset")
+        || msg.contains("connection closed")
+        || msg.contains("broken pipe")
+        || msg.contains("operation timed out")
+        || msg.contains("incomplete message")
+}
+
+async fn is_model_server_reachable(client: &Client, base_url: &str) -> bool {
+    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+    match tokio::time::timeout(Duration::from_secs(2), client.get(&models_url).send()).await {
+        Ok(Ok(resp)) => resp.status().is_success(),
+        _ => false,
+    }
+}
+
+async fn probe_model_chat_ready(client: &Client, app_config: &config::AppConfig) -> bool {
+    let chat_url = format!(
+        "{}/chat/completions",
+        app_config.base_url.trim_end_matches('/')
+    );
+
+    let probe_body = json!({
+        "model": app_config.model_name,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": false,
+        "temperature": 0.0
+    });
+
+    match tokio::time::timeout(
+        Duration::from_secs(20),
+        client.post(&chat_url).json(&probe_body).send(),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => resp.status().is_success(),
+        _ => false,
+    }
+}
+
+fn resolve_server_launch_context() -> Option<(&'static str, &'static str)> {
+    if std::path::Path::new("scripts/start_server.py").exists() {
+        return Some((".", "scripts/start_server.py"));
+    }
+    if std::path::Path::new("../scripts/start_server.py").exists() {
+        return Some(("..", "scripts/start_server.py"));
+    }
+    None
+}
+
+fn open_log_file(path: &str) -> Option<std::fs::File> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
+}
+
+async fn maybe_boot_model_server(client: &Client, app_config: &config::AppConfig) -> bool {
+    if probe_model_chat_ready(client, app_config).await {
+        return true;
+    }
+
+    if MODEL_SERVER_BOOT_ATTEMPTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+
+    let (project_dir, script_rel_path) = match resolve_server_launch_context() {
+        Some(ctx) => ctx,
+        None => return false,
+    };
+
+    let stdout_path = format!("{}/logs/start_server.stdout.log", project_dir);
+    let stderr_path = format!("{}/logs/start_server.stderr.log", project_dir);
+
+    let mut cmd = std::process::Command::new("python");
+    cmd.current_dir(project_dir).arg(script_rel_path);
+
+    // Recovery path prioritizes guaranteed availability over GPU speed.
+    cmd.env("HELIX_BACKEND_HINT", "cpu")
+        .env("HELIX_GPU_LAYERS", "0")
+        .env("HELIX_FALLBACK_BACKEND_HINT", "cpu")
+        .env("HELIX_FALLBACK_GPU_LAYERS", "0");
+
+    if let Some(stdout_file) = open_log_file(&stdout_path) {
+        cmd.stdout(std::process::Stdio::from(stdout_file));
+    }
+
+    if let Some(stderr_file) = open_log_file(&stderr_path) {
+        cmd.stderr(std::process::Stdio::from(stderr_file));
+    }
+
+    if cmd.spawn().is_err() {
+        return false;
+    }
+
+    let startup_timeout_s = std::env::var("HELIX_SERVER_STARTUP_TIMEOUT_S")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(180);
+
+    let polls = std::cmp::max(1, startup_timeout_s);
+    for _ in 0..polls {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        if !is_model_server_reachable(client, &app_config.base_url).await {
+            continue;
+        }
+
+        if probe_model_chat_ready(client, app_config).await {
+            return true;
+        }
+    }
+
+    false
+}
+
+async fn send_with_forced_retry(
+    client: &Client,
+    url: &str,
+    request_body: &Value,
+    max_attempts: usize,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let attempts = std::cmp::max(1, max_attempts);
+    let retry_delay_ms = std::env::var("HELIX_HTTP_RETRY_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1000);
+
+    let mut last_err: Option<reqwest::Error> = None;
+
+    for attempt in 1..=attempts {
+        match client.post(url).json(request_body).send().await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                last_err = Some(err);
+                if attempt < attempts {
+                    tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_err.expect("send_with_forced_retry called without attempts"))
+}
+
+async fn send_with_recovery(
+    client: &Client,
+    url: &str,
+    request_body: &Value,
+    app_config: &config::AppConfig,
+) -> Result<reqwest::Response, reqwest::Error> {
+    match send_with_retry(client, url, request_body, 3).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            if is_transient_http_error(&err) && maybe_boot_model_server(client, app_config).await {
+                let recovery_attempts = std::env::var("HELIX_RECOVERY_RETRY_ATTEMPTS")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(45);
+                return send_with_forced_retry(client, url, request_body, recovery_attempts).await;
+            }
+            Err(err)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading configuration from python runtime...");
@@ -139,11 +465,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rag_store = rag::RagStore::new(&app_config.allowed_dir)?;
     println!("  [✓] Local RAG sequence complete. Vector Store loaded in-memory.");
     */
-    
-    
+
     let persona = std::env::var("AGENT_PERSONA").unwrap_or_else(|_| "os_assistant".to_string());
     let is_chat_mode = app_config.exec_mode == "chat";
-    let url = format!("{}/chat/completions", app_config.base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/chat/completions",
+        app_config.base_url.trim_end_matches('/')
+    );
     let server_flavor = detect_server_flavor(&client, &app_config.base_url).await;
     let strict_tools = server_flavor != ServerFlavor::KoboldCpp;
     let tools_payload = if is_chat_mode {
@@ -152,9 +480,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_tools(&persona, strict_tools)?
     };
     if server_flavor == ServerFlavor::KoboldCpp {
-        println!("[Runtime] Detected KoboldCPP endpoint. Stripping 'strict' tags for schema compatibility, but enforcing native GBNF grammar for 100% accuracy.");
+        println!(
+            "[Runtime] Detected KoboldCPP endpoint. Stripping 'strict' tags for schema compatibility, but enforcing native GBNF grammar for 100% accuracy."
+        );
     }
-    
+
     let generated_grammar = if !is_chat_mode {
         println!("[Runtime] Compiling JSON schemata to GBNF Grammar...");
         tools::generate_tool_grammar(&tools_payload)
@@ -162,13 +492,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         String::new()
     };
 
-    let system_prompt = if is_chat_mode {
+    let system_prompt = if app_config.exec_mode != "agentic" {
         ""
     } else {
         match persona.as_str() {
-            "coder" => "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise.",
-            "researcher" => "You are an autonomous read-only system explorer. You read files and gather system stats using provided tools. You cannot modify files or execute commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise.",
-            _ => "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise."
+            "coder" => {
+                "You are an autonomous code executor. You read and write files using provided tools. You cannot execute terminal commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
+            }
+            "researcher" => {
+                "You are an autonomous read-only system explorer. You read files and gather system stats using provided tools. You cannot modify files or execute commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
+            }
+            _ => {
+                "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise."
+            }
         }
     };
 
@@ -181,12 +517,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             generated_grammar,
             tools_payload,
             server_flavor,
-        ).await;
+        )
+        .await;
         return Ok(());
     }
 
     let mut messages = vec![];
-    
+
     if !system_prompt.is_empty() {
         messages.push(ChatMessage {
             role: "system".to_string(),
@@ -198,7 +535,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let args: Vec<String> = std::env::args().collect();
-    let mut initial_prompt = args.iter().position(|r| r == "--prompt")
+    let mut initial_prompt = args
+        .iter()
+        .position(|r| r == "--prompt")
         .and_then(|idx| args.get(idx + 1))
         .cloned();
     let eval_mode = initial_prompt.is_some();
@@ -211,7 +550,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Initialize HUD context
         let current_tokens = tokens::count_message_tokens(&messages);
-        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(current_tokens, app_config.context_size as usize));
+        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
+            current_tokens,
+            app_config.context_size as usize,
+        ));
 
         // If there's an initial prompt, send it immediately
         if let Some(prompt) = initial_prompt.take() {
@@ -224,9 +566,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             // Process the initial prompt through the LLM loop
             run_llm_loop_tui(
-                &client, &url, &app_config, &mut messages, &tools_payload,
-                &generated_grammar, is_chat_mode, server_flavor, &mut action_rx, &event_tx,
-            ).await;
+                &client,
+                &url,
+                &app_config,
+                &mut messages,
+                &tools_payload,
+                &generated_grammar,
+                is_chat_mode,
+                server_flavor,
+                &mut action_rx,
+                &event_tx,
+            )
+            .await;
             if eval_mode {
                 return Ok(());
             }
@@ -244,9 +595,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         name: None,
                     });
                     run_llm_loop_tui(
-                        &client, &url, &app_config, &mut messages, &tools_payload,
-                        &generated_grammar, is_chat_mode, server_flavor, &mut action_rx, &event_tx,
-                    ).await;
+                        &client,
+                        &url,
+                        &app_config,
+                        &mut messages,
+                        &tools_payload,
+                        &generated_grammar,
+                        is_chat_mode,
+                        server_flavor,
+                        &mut action_rx,
+                        &event_tx,
+                    )
+                    .await;
                 }
                 Some(tui::TuiAction::Quit) | None => {
                     break;
@@ -259,11 +619,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if c == "/clear" {
                         messages.truncate(1); // Keep the system prompt
                         let _ = event_tx.send(tui::TuiEvent::ClearHistory);
-                        let _ = event_tx.send(tui::TuiEvent::SystemMessage("[Context Cleared]".to_string()));
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                            "[Context Cleared]".to_string(),
+                        ));
                         let current_tokens = tokens::count_message_tokens(&messages);
-                        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(current_tokens, app_config.context_size as usize));
+                        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
+                            current_tokens,
+                            app_config.context_size as usize,
+                        ));
                     } else {
-                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[Unknown command] {}", c)));
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                            "[Unknown command] {}",
+                            c
+                        )));
                     }
                 }
             }
@@ -294,7 +662,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let user_input = if let Some(prompt) = initial_prompt.take() {
             prompt
         } else {
-            if eval_mode { break; }
+            if eval_mode {
+                break;
+            }
             let editor = rl.as_mut().unwrap();
             match editor.readline("> ") {
                 Ok(line) => {
@@ -302,7 +672,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if trimmed.eq_ignore_ascii_case("quit") || trimmed.eq_ignore_ascii_case("exit") {
+                    if trimmed.eq_ignore_ascii_case("quit") || trimmed.eq_ignore_ascii_case("exit")
+                    {
                         input::save_history(editor);
                         break;
                     }
@@ -331,7 +702,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let mut round_trip_counter = 0;
-        let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp { 0.05 } else { 0.1 };
+        let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp {
+            0.05
+        } else {
+            0.1
+        };
         let mut temperature_override: f64 = base_temperature;
 
         loop {
@@ -348,7 +723,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let threshold = (app_config.context_size as f32 * 0.70) as usize;
 
             if current_tokens > threshold && messages.len() > 5 {
-                println!("\n[Memory Alert] Context at {} tokens (limit {}). Compacting...", current_tokens, threshold);
+                println!(
+                    "\n[Memory Alert] Context at {} tokens (limit {}). Compacting...",
+                    current_tokens, threshold
+                );
 
                 let mid_point = 1 + ((messages.len() - 1) as f32 * 0.60) as usize;
                 let mut compaction_messages = vec![messages[0].clone()];
@@ -375,7 +753,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mut new_messages = vec![messages[0].clone()];
                                 new_messages.push(ChatMessage {
                                     role: "assistant".to_string(),
-                                    content: Some(format!("[Internal Working Memory Summary]\n{}", summary)),
+                                    content: Some(format!(
+                                        "[Internal Working Memory Summary]\n{}",
+                                        summary
+                                    )),
                                     tool_calls: None,
                                     tool_call_id: None,
                                     name: None,
@@ -393,21 +774,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "messages": &messages,
                 "tools": tools_payload,
                 "temperature": temperature_override,
-                "max_tokens": 8192,
+                "max_tokens": if is_chat_mode { chat_max_tokens() } else { 8192 },
                 "stream": true
             });
 
-            if !is_chat_mode && !generated_grammar.is_empty() {
+            if is_chat_mode {
                 request_body.as_object_mut().unwrap().insert(
-                    "grammar".to_string(),
-                    json!(generated_grammar)
+                    "chat_template_kwargs".to_string(),
+                    json!({ "enable_thinking": false }),
                 );
             }
 
-            let res = match client.post(&url).json(&request_body).send().await {
+            if !is_chat_mode && !generated_grammar.is_empty() {
+                request_body
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("grammar".to_string(), json!(generated_grammar));
+            }
+
+            let res = match send_with_recovery(&client, &url, &request_body, &app_config).await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("[Rust] HTTP Error: {}", e);
+                    println!(
+                        "[Rust] Model server unreachable at {}. Start with `python start.py` or `python scripts/start_server.py`. If logs show CUDA OOM, reduce GPU layers in scripts/config.py.",
+                        app_config.base_url
+                    );
+                    println!("[Rust] {}", read_gpu_layer_hint());
                     break;
                 }
             };
@@ -416,48 +809,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             use std::io::Write;
 
             let mut full_content = String::new();
-            let mut tool_calls_map: std::collections::HashMap<usize, Value> = std::collections::HashMap::new();
+            let mut tool_calls_map: std::collections::HashMap<usize, Value> =
+                std::collections::HashMap::new();
 
             let mut stream = res.bytes_stream();
             let mut sse_parser = stream::SseParser::new();
+            let mut had_stream_error = false;
             println!();
-            
+
             while let Some(chunk_res) = stream.next().await {
                 match chunk_res {
                     Ok(bytes) => {
                         for event in sse_parser.push_bytes(&bytes) {
                             if let stream::SseEvent::Data(data) = event {
                                 if let Ok(json) = serde_json::from_str::<Value>(&data) {
-                                    if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                    if let Some(choices) =
+                                        json.get("choices").and_then(|c| c.as_array())
+                                    {
                                         if let Some(choice) = choices.first() {
                                             if let Some(delta) = choice.get("delta") {
-                                                if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
+                                                if let Some(content) =
+                                                    extract_visible_delta_text(delta, is_chat_mode)
+                                                {
                                                     if !is_chat_mode {
                                                         print!("{}", content);
                                                         std::io::stdout().flush().unwrap();
                                                     }
                                                     full_content.push_str(&content);
                                                 }
-                                                if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                                if let Some(tcs) = delta
+                                                    .get("tool_calls")
+                                                    .and_then(|t| t.as_array())
+                                                {
                                                     for tc in tcs {
-                                                        if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                                        if let Some(index) =
+                                                            tc.get("index").and_then(|i| i.as_u64())
+                                                        {
                                                             let idx = index as usize;
                                                             let entry = tool_calls_map.entry(idx).or_insert(json!({
                                                                 "id": "",
                                                                 "type": "function",
                                                                 "function": { "name": "", "arguments": "" }
                                                             }));
-                                                            if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
+                                                            if let Some(id) = tc
+                                                                .get("id")
+                                                                .and_then(|id| id.as_str())
+                                                            {
                                                                 entry["id"] = json!(id);
                                                             }
                                                             if let Some(func) = tc.get("function") {
-                                                                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                                                                    let current = entry["function"]["name"].as_str().unwrap_or("");
-                                                                    entry["function"]["name"] = json!(format!("{}{}", current, name));
+                                                                if let Some(name) = func
+                                                                    .get("name")
+                                                                    .and_then(|n| n.as_str())
+                                                                {
+                                                                    let current = entry["function"]
+                                                                        ["name"]
+                                                                        .as_str()
+                                                                        .unwrap_or("");
+                                                                    entry["function"]["name"] =
+                                                                        json!(format!(
+                                                                            "{}{}",
+                                                                            current, name
+                                                                        ));
                                                                 }
-                                                                if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
-                                                                    let current = entry["function"]["arguments"].as_str().unwrap_or("");
-                                                                    entry["function"]["arguments"] = json!(format!("{}{}", current, args));
+                                                                if let Some(args) = func
+                                                                    .get("arguments")
+                                                                    .and_then(|a| a.as_str())
+                                                                {
+                                                                    let current = entry["function"]
+                                                                        ["arguments"]
+                                                                        .as_str()
+                                                                        .unwrap_or("");
+                                                                    entry["function"]["arguments"] =
+                                                                        json!(format!(
+                                                                            "{}{}",
+                                                                            current, args
+                                                                        ));
                                                                 }
                                                             }
                                                         }
@@ -472,22 +899,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(e) => {
                         println!("\n[Rust] Stream error: {}", e);
+                        had_stream_error = true;
                         if full_content.is_empty() && tool_calls_map.is_empty() {
                             let mut fallback_body = request_body.clone();
                             fallback_body["stream"] = json!(false);
-                            if let Ok(fallback_res) = client.post(&url).json(&fallback_body).send().await {
+                            if let Ok(fallback_res) =
+                                client.post(&url).json(&fallback_body).send().await
+                            {
                                 if let Ok(fallback_text) = fallback_res.text().await {
-                                    if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&fallback_text) {
-                                        if let Some(choice) = parsed.choices.first() {
-                                            if let Some(content) = &choice.message.content {
+                                    let mut parsed_any = false;
+                                    if let Ok(parsed) =
+                                        serde_json::from_str::<Value>(&fallback_text)
+                                    {
+                                        if let Some(choice) = parsed
+                                            .get("choices")
+                                            .and_then(|v| v.as_array())
+                                            .and_then(|arr| arr.first())
+                                        {
+                                            if let Some(content) = choice
+                                                .get("message")
+                                                .and_then(|m| m.get("content"))
+                                                .and_then(|c| c.as_str())
+                                            {
                                                 full_content.push_str(content);
+                                                parsed_any = true;
+                                            } else if let Some(content) =
+                                                choice.get("text").and_then(|c| c.as_str())
+                                            {
+                                                full_content.push_str(content);
+                                                parsed_any = true;
                                             }
-                                            if let Some(tcs) = &choice.message.tool_calls {
+                                            if let Some(tcs) = choice
+                                                .get("message")
+                                                .and_then(|m| m.get("tool_calls"))
+                                                .and_then(|tc| tc.as_array())
+                                            {
                                                 for (idx, tc) in tcs.iter().enumerate() {
                                                     tool_calls_map.insert(idx, tc.clone());
                                                 }
+                                                parsed_any = true;
                                             }
                                         }
+                                    }
+                                    if !parsed_any && !fallback_text.trim().is_empty() {
+                                        full_content.push_str(&fallback_text);
                                     }
                                 }
                             }
@@ -503,33 +958,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
-                                    if let Some(content) = extract_visible_delta_text(delta, is_chat_mode) {
-                                                    if !is_chat_mode {
-                                                        print!("{}", content);
-                                                        std::io::stdout().flush().unwrap();
-                                                    }
-                                                    full_content.push_str(&content);
-                                                }
-                                    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                    if let Some(content) =
+                                        extract_visible_delta_text(delta, is_chat_mode)
+                                    {
+                                        if !is_chat_mode {
+                                            print!("{}", content);
+                                            std::io::stdout().flush().unwrap();
+                                        }
+                                        full_content.push_str(&content);
+                                    }
+                                    if let Some(tcs) =
+                                        delta.get("tool_calls").and_then(|t| t.as_array())
+                                    {
                                         for tc in tcs {
-                                            if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                            if let Some(index) =
+                                                tc.get("index").and_then(|i| i.as_u64())
+                                            {
                                                 let idx = index as usize;
-                                                let entry = tool_calls_map.entry(idx).or_insert(json!({
-                                                    "id": "",
-                                                    "type": "function",
-                                                    "function": { "name": "", "arguments": "" }
-                                                }));
-                                                if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
+                                                let entry =
+                                                    tool_calls_map.entry(idx).or_insert(json!({
+                                                        "id": "",
+                                                        "type": "function",
+                                                        "function": { "name": "", "arguments": "" }
+                                                    }));
+                                                if let Some(id) =
+                                                    tc.get("id").and_then(|id| id.as_str())
+                                                {
                                                     entry["id"] = json!(id);
                                                 }
                                                 if let Some(func) = tc.get("function") {
-                                                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                                                        let current = entry["function"]["name"].as_str().unwrap_or("");
-                                                        entry["function"]["name"] = json!(format!("{}{}", current, name));
+                                                    if let Some(name) =
+                                                        func.get("name").and_then(|n| n.as_str())
+                                                    {
+                                                        let current = entry["function"]["name"]
+                                                            .as_str()
+                                                            .unwrap_or("");
+                                                        entry["function"]["name"] =
+                                                            json!(format!("{}{}", current, name));
                                                     }
-                                                    if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
-                                                        let current = entry["function"]["arguments"].as_str().unwrap_or("");
-                                                        entry["function"]["arguments"] = json!(format!("{}{}", current, args));
+                                                    if let Some(args) = func
+                                                        .get("arguments")
+                                                        .and_then(|a| a.as_str())
+                                                    {
+                                                        let current =
+                                                            entry["function"]["arguments"]
+                                                                .as_str()
+                                                                .unwrap_or("");
+                                                        entry["function"]["arguments"] =
+                                                            json!(format!("{}{}", current, args));
                                                     }
                                                 }
                                             }
@@ -551,7 +1027,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let message_content = if full_content.is_empty() {
-                None
+                if final_tool_calls.is_empty() {
+                    if had_stream_error {
+                        Some("I hit a stream decoding error and non-stream recovery returned no visible output. Please retry.".to_string())
+                    } else {
+                        Some("I could not produce a visible response. Please retry.".to_string())
+                    }
+                } else {
+                    None
+                }
             } else {
                 let visible = format_visible_output(&full_content, is_chat_mode);
                 if is_chat_mode && !visible.is_empty() {
@@ -560,7 +1044,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Some(visible)
             };
-            let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() { None } else { Some(final_tool_calls) };
+
+            if is_chat_mode && full_content.is_empty() {
+                if let Some(fallback_msg) = &message_content {
+                    print!("{}", fallback_msg);
+                    std::io::stdout().flush().unwrap();
+                }
+            }
+            let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() {
+                None
+            } else {
+                Some(final_tool_calls)
+            };
 
             if message_tool_calls.is_none() {
                 temperature_override = base_temperature;
@@ -573,7 +1068,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tool_call_id: None,
                 name: None,
             };
-            
+
             if history_message.tool_calls.is_some() {
                 history_message.tool_calls = None;
                 if history_message.content.is_none() {
@@ -610,32 +1105,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "arguments": parsed_args
                     });
 
-                    let tool_result = match serde_json::from_value::<ToolCallArgs>(simulated_payload) {
+                    let tool_result = match serde_json::from_value::<ToolCallArgs>(
+                        simulated_payload,
+                    ) {
                         Ok(ToolCallArgs::RunTerminalCommand(input)) => {
                             tools::execute_run_terminal_command(
                                 input,
                                 &app_config.dangerous_commands,
                                 app_config.require_confirmation,
                             )
-                        },
+                        }
                         Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
                         Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
                         Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
-                        Ok(ToolCallArgs::ListDirectory(input)) => tools::execute_list_directory(input),
+                        Ok(ToolCallArgs::ListDirectory(input)) => {
+                            tools::execute_list_directory(input)
+                        }
                         Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-                        Ok(ToolCallArgs::SearchCodebase(_)) => {
-                            tools::ToolResult { success: false, output: "Tool 'search_codebase' is currently disabled.".to_string() }
+                        Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
+                            success: false,
+                            output: "Tool 'search_codebase' is currently disabled.".to_string(),
                         },
                         Err(e) => {
-                            println!("[Critic] SCHEMA ERROR — injecting self-correction directive.");
+                            println!(
+                                "[Critic] SCHEMA ERROR — injecting self-correction directive."
+                            );
                             let correction = format!(
                                 "You sent invalid arguments to the '{}' tool. Schema error: {}. \
                                 Carefully re-read the tool's required parameters and call it again with the correct argument names and types.",
                                 func_name, e
                             );
                             critic_injections.push(critic_message(&correction));
-                            temperature_override = if server_flavor == ServerFlavor::KoboldCpp { 0.2 } else { 0.3 };
-                            tools::ToolResult { success: false, output: format!("[Schema mismatch — see correction directive above]") }
+                            temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
+                                0.2
+                            } else {
+                                0.3
+                            };
+                            tools::ToolResult {
+                                success: false,
+                                output: format!(
+                                    "[Schema mismatch — see correction directive above]"
+                                ),
+                            }
                         }
                     };
 
@@ -644,7 +1155,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         critic_injections.push(critic_message(
                             "The previous command failed. Analyze the error output above carefully. Correct your approach and retry now. Do NOT repeat the same command."
                         ));
-                        temperature_override = if server_flavor == ServerFlavor::KoboldCpp { 0.2 } else { 0.3 };
+                        temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
+                            0.2
+                        } else {
+                            0.3
+                        };
                     }
 
                     if tool_result.success && func_name == "write_file" {
@@ -693,27 +1208,35 @@ async fn run_llm_loop_tui(
     action_rx: &mut tokio::sync::mpsc::UnboundedReceiver<tui::TuiAction>,
     event_tx: &tokio::sync::mpsc::UnboundedSender<tui::TuiEvent>,
 ) {
-    let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp { 0.05 } else { 0.1 };
+    let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp {
+        0.05
+    } else {
+        0.1
+    };
     let mut temperature_override: f64 = base_temperature;
 
     for round in 0..20 {
         if round >= 20 {
             let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                "[Safety exit] Exceeded 20 action rounds.".to_string()
+                "[Safety exit] Exceeded 20 action rounds.".to_string(),
             ));
             break;
         }
 
         let current_tokens = tokens::count_message_tokens(messages);
-        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(current_tokens, app_config.context_size as usize));
+        let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
+            current_tokens,
+            app_config.context_size as usize,
+        ));
 
         // Context compaction check
         let threshold = (app_config.context_size as f32 * 0.70) as usize;
 
         if current_tokens > threshold && messages.len() > 5 {
-            let _ = event_tx.send(tui::TuiEvent::Status(
-                format!("Compacting context ({} tokens)...", current_tokens)
-            ));
+            let _ = event_tx.send(tui::TuiEvent::Status(format!(
+                "Compacting context ({} tokens)...",
+                current_tokens
+            )));
 
             let mid_point = 1 + ((messages.len() - 1) as f32 * 0.60) as usize;
             let mut compaction_messages = vec![messages[0].clone()];
@@ -739,7 +1262,10 @@ async fn run_llm_loop_tui(
                             let mut new_messages = vec![messages[0].clone()];
                             new_messages.push(ChatMessage {
                                 role: "assistant".to_string(),
-                                content: Some(format!("[Internal Working Memory Summary]\n{}", summary)),
+                                content: Some(format!(
+                                    "[Internal Working Memory Summary]\n{}",
+                                    summary
+                                )),
                                 tool_calls: None,
                                 tool_call_id: None,
                                 name: None,
@@ -758,25 +1284,48 @@ async fn run_llm_loop_tui(
             "messages": &messages,
             "tools": tools_payload,
             "temperature": temperature_override,
-            "max_tokens": 8192,
+            "max_tokens": if is_chat_mode { chat_max_tokens() } else { 8192 },
             "stream": true
         });
 
-        if !is_chat_mode && !generated_grammar.is_empty() {
+        if is_chat_mode {
             request_body.as_object_mut().unwrap().insert(
-                "grammar".to_string(),
-                json!(generated_grammar)
+                "chat_template_kwargs".to_string(),
+                json!({ "enable_thinking": false }),
             );
+        }
+
+        if !is_chat_mode && !generated_grammar.is_empty() {
+            request_body
+                .as_object_mut()
+                .unwrap()
+                .insert("grammar".to_string(), json!(generated_grammar));
         }
 
         let _ = event_tx.send(tui::TuiEvent::Status("Generating...".to_string()));
 
-        let res = match client.post(url).json(&request_body).send().await {
-            Ok(r) => r,
+        let res = match send_with_recovery(client, url, &request_body, app_config).await {
+            Ok(r) => {
+                TUI_HTTP_CONNECT_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
+                r
+            }
             Err(e) => {
-                let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                    format!("[HTTP Error] {}", e)
-                ));
+                let fails =
+                    TUI_HTTP_CONNECT_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[HTTP Error] {}", e)));
+                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[Hint] Model server unreachable at {}. Start with `python start.py` or `python scripts/start_server.py`. If logs show CUDA OOM, reduce GPU layers in scripts/config.py.", app_config.base_url)));
+                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                    "[Hint] {}",
+                    read_gpu_layer_hint()
+                )));
+                if fails >= 2 {
+                    if let Some(oom_excerpt) = latest_oom_excerpt() {
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                            "[Diagnostics] Recent model-server OOM evidence:\n{}",
+                            oom_excerpt
+                        )));
+                    }
+                }
                 break;
             }
         };
@@ -784,9 +1333,11 @@ async fn run_llm_loop_tui(
         use futures_util::stream::StreamExt;
 
         let mut full_content = String::new();
-        let mut tool_calls_map: std::collections::HashMap<usize, Value> = std::collections::HashMap::new();
+        let mut tool_calls_map: std::collections::HashMap<usize, Value> =
+            std::collections::HashMap::new();
         let mut stream = res.bytes_stream();
         let mut sse_parser = stream::SseParser::new();
+        let mut had_stream_error = false;
         let mut generation_started_sent = false;
         let mut last_heartbeat = std::time::Instant::now();
 
@@ -862,6 +1413,7 @@ async fn run_llm_loop_tui(
                             }
                         }
                         Some(Err(e)) => {
+                            had_stream_error = true;
                             let _ = event_tx.send(tui::TuiEvent::SystemMessage(
                                 format!("[Stream error] {}", e)
                             ));
@@ -873,17 +1425,41 @@ async fn run_llm_loop_tui(
                                 fallback_body["stream"] = json!(false);
                                 if let Ok(fallback_res) = client.post(url).json(&fallback_body).send().await {
                                     if let Ok(fallback_text) = fallback_res.text().await {
-                                        if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&fallback_text) {
-                                            if let Some(choice) = parsed.choices.first() {
-                                                if let Some(content) = &choice.message.content {
+                                        let mut parsed_any = false;
+                                        if let Ok(parsed) = serde_json::from_str::<Value>(&fallback_text) {
+                                            if let Some(choice) = parsed
+                                                .get("choices")
+                                                .and_then(|v| v.as_array())
+                                                .and_then(|arr| arr.first())
+                                            {
+                                                if let Some(content) = choice
+                                                    .get("message")
+                                                    .and_then(|m| m.get("content"))
+                                                    .and_then(|c| c.as_str())
+                                                {
                                                     full_content.push_str(content);
+                                                    parsed_any = true;
+                                                } else if let Some(content) = choice
+                                                    .get("text")
+                                                    .and_then(|c| c.as_str())
+                                                {
+                                                    full_content.push_str(content);
+                                                    parsed_any = true;
                                                 }
-                                                if let Some(tcs) = &choice.message.tool_calls {
+                                                if let Some(tcs) = choice
+                                                    .get("message")
+                                                    .and_then(|m| m.get("tool_calls"))
+                                                    .and_then(|tc| tc.as_array())
+                                                {
                                                     for (idx, tc) in tcs.iter().enumerate() {
                                                         tool_calls_map.insert(idx, tc.clone());
                                                     }
+                                                    parsed_any = true;
                                                 }
                                             }
+                                        }
+                                        if !parsed_any && !fallback_text.trim().is_empty() {
+                                            full_content.push_str(&fallback_text);
                                         }
                                     }
                                 }
@@ -968,7 +1544,15 @@ async fn run_llm_loop_tui(
         }
 
         let message_content = if full_content.is_empty() {
-            None
+            if final_tool_calls.is_empty() {
+                if had_stream_error {
+                    Some("I hit a stream decoding error and non-stream recovery returned no visible output. Please retry.".to_string())
+                } else {
+                    Some("I could not produce a visible response. Please retry.".to_string())
+                }
+            } else {
+                None
+            }
         } else {
             Some(format_visible_output(&full_content, is_chat_mode))
         };
@@ -982,7 +1566,11 @@ async fn run_llm_loop_tui(
             }
         }
 
-        let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() { None } else { Some(final_tool_calls) };
+        let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() {
+            None
+        } else {
+            Some(final_tool_calls)
+        };
 
         if message_tool_calls.is_none() {
             temperature_override = base_temperature;
@@ -1045,14 +1633,15 @@ async fn run_llm_loop_tui(
                             &app_config.dangerous_commands,
                             app_config.require_confirmation,
                         )
-                    },
+                    }
                     Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
                     Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
                     Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
                     Ok(ToolCallArgs::ListDirectory(input)) => tools::execute_list_directory(input),
                     Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-                    Ok(ToolCallArgs::SearchCodebase(_)) => {
-                        tools::ToolResult { success: false, output: "Tool 'search_codebase' is currently disabled.".to_string() }
+                    Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
+                        success: false,
+                        output: "Tool 'search_codebase' is currently disabled.".to_string(),
                     },
                     Err(e) => {
                         let correction = format!(
@@ -1061,8 +1650,16 @@ async fn run_llm_loop_tui(
                             func_name, e
                         );
                         critic_injections.push(critic_message(&correction));
-                        temperature_override = if server_flavor == ServerFlavor::KoboldCpp { 0.2 } else { 0.3 };
-                        tools::ToolResult { success: false, output: "[Schema mismatch — see correction directive above]".to_string() }
+                        temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
+                            0.2
+                        } else {
+                            0.3
+                        };
+                        tools::ToolResult {
+                            success: false,
+                            output: "[Schema mismatch — see correction directive above]"
+                                .to_string(),
+                        }
                     }
                 };
 
@@ -1077,7 +1674,11 @@ async fn run_llm_loop_tui(
                     critic_injections.push(critic_message(
                         "The previous command failed. Analyze the error output above carefully. Correct your approach and retry now. Do NOT repeat the same command."
                     ));
-                    temperature_override = if server_flavor == ServerFlavor::KoboldCpp { 0.2 } else { 0.3 };
+                    temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
+                        0.2
+                    } else {
+                        0.3
+                    };
                 }
 
                 if tool_result.success && func_name == "write_file" {
@@ -1127,7 +1728,10 @@ mod tests {
     #[test]
     fn prefers_content_over_other_fields() {
         let delta = json!({"content": "primary", "text": "secondary"});
-        assert_eq!(extract_visible_delta_text(&delta, true), Some("primary".to_string()));
+        assert_eq!(
+            extract_visible_delta_text(&delta, true),
+            Some("primary".to_string())
+        );
     }
 
     #[test]

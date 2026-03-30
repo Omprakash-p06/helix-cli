@@ -38,7 +38,7 @@ try:
         "context_size": getattr(config, 'CONTEXT_SIZE', 8192),
         "require_confirmation": getattr(config, 'REQUIRE_CONFIRMATION', True),
         "dangerous_commands": getattr(config, 'DANGEROUS_COMMANDS', ["rm", "mv"]),
-        "exec_mode": os.environ.get("HELIX_EXEC_MODE", "agentic"),
+        "exec_mode": os.environ.get("HELIX_EXEC_MODE", "chat"),
     }
     print(json.dumps(data))
 except Exception as e:
@@ -59,8 +59,12 @@ except Exception as e:
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let config: AppConfig = serde_json::from_str(&stdout)
-            .map_err(|e| format!("Failed to parse JSON config from python: {} - '{}'", e, stdout))?;
+        let config: AppConfig = serde_json::from_str(&stdout).map_err(|e| {
+            format!(
+                "Failed to parse JSON config from python: {} - '{}'",
+                e, stdout
+            )
+        })?;
 
         Ok(config)
     }
