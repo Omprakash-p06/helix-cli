@@ -9,7 +9,6 @@ pub mod types;
 mod utils;
 
 use futures_util::future::join_all;
-use futures_util::future::join_all;
 use reqwest::Client;
 use rustyline::error::ReadlineError;
 use schemars::schema_for;
@@ -1878,15 +1877,14 @@ async fn run_llm_loop_tui(
 
         messages.push(history_message);
 
-        // Execute tool calls
+        // Execute tool calls - async non-blocking (TOOL-01, TOOL-02, TOOL-03, TOOL-04)
         if let Some(tool_calls) = &message_tool_calls {
             if tool_calls.is_empty() {
                 break;
             }
-            let mut critic_injections: Vec<ChatMessage> = Vec::new();
 
+            // Emit ToolStart event for EACH tool before execution (TOOL-02)
             for tc in tool_calls {
-                let id = tc["id"].as_str().unwrap_or("").to_string();
                 let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
                 let args_value = &tc["function"]["arguments"];
                 let parsed_args = if let Some(raw_str) = args_value.as_str() {
@@ -1896,62 +1894,38 @@ async fn run_llm_loop_tui(
                 } else {
                     json!({})
                 };
-
-                // Emit ToolStart event to TUI
                 let _ = event_tx.send(tui::TuiEvent::ToolStart(tui::ToolInfo {
                     name: func_name.clone(),
                     arguments: parsed_args.to_string(),
                 }));
+            }
 
-                let simulated_payload = json!({
-                    "name": func_name,
-                    "arguments": parsed_args
-                });
-
-                let tool_result = match serde_json::from_value::<ToolCallArgs>(simulated_payload) {
-                    Ok(ToolCallArgs::RunTerminalCommand(input)) => {
-                        tools::execute_run_terminal_command(
-                            input,
-                            &app_config.dangerous_commands,
-                            app_config.require_confirmation,
-                        )
+            // Execute all tools concurrently via join_all (TOOL-04)
+            let tasks: Vec<_> = tool_calls
+                .iter()
+                .map(|tc| {
+                    let tc = tc.clone();
+                    let dangerous = app_config.dangerous_commands.clone();
+                    let require_confirm = app_config.require_confirmation;
+                    async move {
+                        execute_tool_async(tc, &dangerous, require_confirm).await
                     }
-                    Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
-                    Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
-                    Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
-                    Ok(ToolCallArgs::ListDirectory(input)) => tools::execute_list_directory(input),
-                    Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-                    Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
-                        success: false,
-                        output: "Tool 'search_codebase' is currently disabled.".to_string(),
-                    },
-                    Err(e) => {
-                        let correction = format!(
-                            "You sent invalid arguments to the '{}' tool. Schema error: {}. \
-                            Carefully re-read the tool's required parameters and call it again with the correct argument names and types.",
-                            func_name, e
-                        );
-                        critic_injections.push(critic_message(&correction));
-                        temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
-                            0.2
-                        } else {
-                            0.3
-                        };
-                        tools::ToolResult {
-                            success: false,
-                            output: "[Schema mismatch — see correction directive above]"
-                                .to_string(),
-                        }
-                    }
-                };
+                })
+                .collect();
 
-                // Emit ToolResult event to TUI
+            let results = join_all(tasks).await;
+
+            // Process results in original order (TOOL-03, TOOL-04)
+            let mut critic_injections: Vec<ChatMessage> = Vec::new();
+            for (id, tool_result, func_name) in results.into_iter() {
+                // Emit ToolResult event after completion (TOOL-02, TOOL-03)
                 let _ = event_tx.send(tui::TuiEvent::ToolResult(tui::ToolResultInfo {
                     name: func_name.clone(),
                     output: tool_result.output.clone(),
                     success: tool_result.success,
                 }));
 
+                // Handle critic injections for failed tools
                 if !tool_result.success && func_name == "run_terminal_command" {
                     critic_injections.push(critic_message(
                         "The previous command failed. Analyze the error output above carefully. Correct your approach and retry now. Do NOT repeat the same command."
@@ -1969,6 +1943,7 @@ async fn run_llm_loop_tui(
                     ));
                 }
 
+                // Inject ChatMessage with role "tool" (TOOL-03)
                 messages.push(ChatMessage {
                     role: "tool".to_string(),
                     content: Some(tool_result.output),
