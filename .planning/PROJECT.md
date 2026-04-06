@@ -52,6 +52,7 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 - ✓ Modern Web Interface React app with real-time SSE streaming
 - ✓ Rich Terminal Input with Bracketed Paste
 - ✓ Deterministic Grammar-Enforced Tool Calling (GBNF schemas) across backends
+- ✓ Non-blocking async tool execution with parallel support (TOOL-01, TOOL-02, TOOL-03 — Phase 17)
 
 ### Active
 
@@ -59,9 +60,6 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 - [ ] **CHAT-02 (Reasoning Filter):** Post-processing layer to strip thinking traces from chat mode output.
 - [ ] **STREAM-01 (Live Token Rendering):** No buffering; raw bytes read immediately and fed to terminal/TUI.
 - [ ] **STREAM-02 (Immediate Redraw):** Terminal flushes after each token. TUI redraws on every chunk.
-- [ ] **TOOL-01 (Non-blocking Tools):** Tool execution in async tasks without blocking UI.
-- [ ] **TOOL-02 (Parallel Execution):** Multiple tool calls in one turn executed concurrently.
-- [ ] **TOOL-03 (Tool Status UI):** Live status display for running tools in terminal and web UI.
 - [ ] **CODE-01 (Shared Types):** Extract common types into `agent_core` crate for reuse.
 - [ ] **CODE-02 (Tracing & Logging):** Structured logging for streaming delays and tool lifecycles.
 - [ ] **CODE-03 (Clippy Clean):** All code passes `cargo clippy` with zero warnings.
@@ -86,7 +84,7 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 | Rich Terminal Rust Crate | A primary pain-point for CLI dev tools is raw text pasting. `rustyline` resolves this seamlessly. | Pending implementation |
 
 ---
-*Last updated: 2026-03-29 — Milestone v1.2 initiated*
+*Last updated: 2026-04-06 — Phase 17 complete*
 
 ## Evolution
 
