@@ -1349,23 +1349,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Execute all tools concurrently via join_all (TOOL-01, TOOL-04)
+                // Track original index for result ordering (D-04)
                 let tasks: Vec<_> = tool_calls
                     .iter()
-                    .map(|tc| {
+                    .enumerate()
+                    .map(|(idx, tc)| {
                         let tc = tc.clone();
                         let dangerous = app_config.dangerous_commands.clone();
                         let require_confirm = app_config.require_confirmation;
                         async move {
-                            execute_tool_async(tc, &dangerous, require_confirm).await
+                            (idx, execute_tool_async(tc, &dangerous, require_confirm).await)
                         }
                     })
                     .collect();
 
-                let results = join_all(tasks).await;
+                let mut results = join_all(tasks).await;
+
+                // Sort by original index to maintain call order (D-04)
+                results.sort_by_key(|(idx, _)| *idx);
 
                 // Process results in original order, no TUI events in terminal mode
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
-                for (id, tool_result, func_name) in results.into_iter() {
+                for (_idx, (id, tool_result, func_name)) in results.into_iter().enumerate() {
                     if eval_mode {
                         println!("➜ Tool: {}", func_name);
                     }
@@ -1866,23 +1871,28 @@ async fn run_llm_loop_tui(
             }
 
             // Execute all tools concurrently via join_all (TOOL-04)
+            // Track original index for result ordering (D-04)
             let tasks: Vec<_> = tool_calls
                 .iter()
-                .map(|tc| {
+                .enumerate()
+                .map(|(idx, tc)| {
                     let tc = tc.clone();
                     let dangerous = app_config.dangerous_commands.clone();
                     let require_confirm = app_config.require_confirmation;
                     async move {
-                        execute_tool_async(tc, &dangerous, require_confirm).await
+                        (idx, execute_tool_async(tc, &dangerous, require_confirm).await)
                     }
                 })
                 .collect();
 
-            let results = join_all(tasks).await;
+            let mut results = join_all(tasks).await;
+
+            // Sort by original index to maintain call order (D-04)
+            results.sort_by_key(|(idx, _)| *idx);
 
             // Process results in original order (TOOL-03, TOOL-04)
             let mut critic_injections: Vec<ChatMessage> = Vec::new();
-            for (id, tool_result, func_name) in results.into_iter() {
+            for (_idx, (id, tool_result, func_name)) in results.into_iter().enumerate() {
                 // Emit ToolResult event after completion (TOOL-02, TOOL-03)
                 let _ = event_tx.send(tui::TuiEvent::ToolResult(tui::ToolResultInfo {
                     name: func_name.clone(),
