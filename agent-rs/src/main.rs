@@ -8,12 +8,16 @@ mod tui;
 pub mod types;
 mod utils;
 
+use futures_util::future::join_all;
+use futures_util::future::join_all;
 use reqwest::Client;
 use rustyline::error::ReadlineError;
 use schemars::schema_for;
 use serde_json::{Value, json};
 use std::thread;
 use std::time::Duration;
+use tokio::task::spawn_blocking;
+use tokio::time::timeout;
 use tools::ToolCallArgs;
 
 pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};
@@ -22,6 +26,78 @@ static TUI_HTTP_CONNECT_FAILS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 static MODEL_SERVER_BOOT_ATTEMPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Async tool execution wrappers (TOOL-01, TOOL-05)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Async wrapper for executing a single tool with timeout.
+/// Runs the sync tool on the blocking thread pool via spawn_blocking.
+/// Enforces 30s timeout per TOOL-05.
+async fn execute_tool_async(
+    tc: Value,
+    dangerous_commands: &[String],
+    require_confirmation: bool,
+) -> (String, tools::ToolResult, String) {
+    let id = tc["id"].as_str().unwrap_or("").to_string();
+    let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+
+    let tool_result = timeout(
+        Duration::from_secs(30),
+        spawn_blocking(move || {
+            execute_tool_sync(&tc, dangerous_commands, require_confirmation)
+        }),
+    )
+    .await
+    .unwrap_or_else(|_| tools::ToolResult {
+        success: false,
+        output: format!("Tool '{}' timed out after 30 seconds", func_name),
+    });
+
+    (id, tool_result, func_name)
+}
+
+/// Synchronous core that runs on the blocking thread pool.
+/// Dispatches to the appropriate tool execution function.
+fn execute_tool_sync(
+    tc: &Value,
+    dangerous_commands: &[String],
+    require_confirmation: bool,
+) -> tools::ToolResult {
+    let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+    let args_value = &tc["function"]["arguments"];
+    let parsed_args = if let Some(raw_str) = args_value.as_str() {
+        serde_json::from_str::<Value>(raw_str).unwrap_or(json!({}))
+    } else if args_value.is_object() {
+        args_value.clone()
+    } else {
+        json!({})
+    };
+
+    let simulated_payload = json!({
+        "name": func_name,
+        "arguments": parsed_args
+    });
+
+    match serde_json::from_value::<tools::ToolCallArgs>(simulated_payload) {
+        Ok(ToolCallArgs::RunTerminalCommand(input)) => {
+            tools::execute_run_terminal_command(input, dangerous_commands, require_confirmation)
+        }
+        Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
+        Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
+        Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
+        Ok(ToolCallArgs::ListDirectory(input)) => tools::execute_list_directory(input),
+        Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
+        Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
+            success: false,
+            output: "Tool 'search_codebase' is currently disabled.".to_string(),
+        },
+        Err(e) => tools::ToolResult {
+            success: false,
+            output: format!("Schema error: {}", e),
+        },
+    }
+}
 
 pub fn critic_message(text: &str) -> ChatMessage {
     ChatMessage {
@@ -321,9 +397,13 @@ fn read_gpu_layer_hint() -> String {
     )
 }
 
-fn system_prompt_for_mode(exec_mode: &str, persona: &str) -> String {
+fn system_prompt_for_mode(
+    exec_mode: &str,
+    persona: &str,
+    app_config: &config::AppConfig,
+) -> String {
     if exec_mode != "agentic" {
-        return String::new();
+        return app_config.chat_system_prompt.clone();
     }
 
     match persona {
@@ -335,10 +415,7 @@ fn system_prompt_for_mode(exec_mode: &str, persona: &str) -> String {
             "You are an autonomous read-only system explorer. You read files and gather system stats using provided tools. You cannot modify files or execute commands. State your reasoning in one sentence before each tool call. Do not greet the user. Do not introduce yourself. Be concise."
                 .to_string()
         }
-        _ => {
-            "You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths — verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise. You have local tool access through these tools, so do not ask the user to run local file-system commands when a tool can do it."
-                .to_string()
-        }
+        _ => app_config.agentic_system_prompt.clone(),
     }
 }
 
@@ -620,7 +697,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[Runtime] Tool grammar disabled for this backend; using native tool-calling.");
     }
 
-    let mut system_prompt = system_prompt_for_mode(&exec_mode, &persona);
+    let mut system_prompt = system_prompt_for_mode(&exec_mode, &persona, &app_config);
 
     let ui_mode = std::env::var("HELIX_UI_MODE").unwrap_or_else(|_| "terminal".to_string());
 
@@ -807,7 +884,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ));
                         }
 
-                        system_prompt = system_prompt_for_mode(&exec_mode, &persona);
+                        system_prompt = system_prompt_for_mode(&exec_mode, &persona, &app_config);
                         sync_system_prompt_message(&mut messages, &system_prompt);
                         let current_tokens = tokens::count_message_tokens(&messages);
                         let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
@@ -1914,10 +1991,23 @@ mod tests {
     use super::{
         extract_stream_tool_calls, extract_visible_delta_text, extract_visible_stream_choice_text,
         flush_token_buffer, format_visible_output, should_replay_final_content,
-        should_retry_non_stream_after_stream_error,
+        should_retry_non_stream_after_stream_error, system_prompt_for_mode,
     };
     use serde_json::json;
     use tokio::sync::mpsc;
+
+    fn test_app_config() -> crate::config::AppConfig {
+        crate::config::AppConfig {
+            base_url: "http://127.0.0.1:8080/v1".to_string(),
+            model_name: "test-model".to_string(),
+            context_size: 8192,
+            require_confirmation: true,
+            dangerous_commands: vec![],
+            exec_mode: "chat".to_string(),
+            chat_system_prompt: "chat-prompt".to_string(),
+            agentic_system_prompt: "agentic-prompt".to_string(),
+        }
+    }
 
     #[test]
     fn extracts_non_content_visible_text() {
@@ -2034,6 +2124,24 @@ mod tests {
         assert!(should_replay_final_content(false, Some("hello")));
         assert!(!should_replay_final_content(false, Some("")));
         assert!(!should_replay_final_content(false, None));
+    }
+
+    #[test]
+    fn system_prompt_uses_chat_prompt_for_chat_mode() {
+        let app_config = test_app_config();
+        assert_eq!(
+            system_prompt_for_mode("chat", "os_assistant", &app_config),
+            "chat-prompt"
+        );
+    }
+
+    #[test]
+    fn system_prompt_uses_configured_agentic_prompt_for_default_persona() {
+        let app_config = test_app_config();
+        assert_eq!(
+            system_prompt_for_mode("agentic", "os_assistant", &app_config),
+            "agentic-prompt"
+        );
     }
 }
 
