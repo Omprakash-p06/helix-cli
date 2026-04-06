@@ -1370,7 +1370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Process results in original order, no TUI events in terminal mode
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
-                for (_idx, (id, tool_result, func_name)) in results.into_iter().enumerate() {
+                for (_original_idx, (id, tool_result, func_name)) in results.into_iter() {
                     if eval_mode {
                         println!("➜ Tool: {}", func_name);
                     }
@@ -1892,7 +1892,7 @@ async fn run_llm_loop_tui(
 
             // Process results in original order (TOOL-03, TOOL-04)
             let mut critic_injections: Vec<ChatMessage> = Vec::new();
-            for (_idx, (id, tool_result, func_name)) in results.into_iter().enumerate() {
+            for (_original_idx, (id, tool_result, func_name)) in results.into_iter() {
                 // Emit ToolResult event after completion (TOOL-02, TOOL-03)
                 let _ = event_tx.send(tui::TuiEvent::ToolResult(tui::ToolResultInfo {
                     name: func_name.clone(),
