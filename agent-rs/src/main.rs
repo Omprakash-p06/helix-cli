@@ -41,17 +41,25 @@ async fn execute_tool_async(
     let id = tc["id"].as_str().unwrap_or("").to_string();
     let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
 
-    let tool_result = timeout(
+    let dangerous_owned = dangerous_commands.to_vec();
+    let tool_result = match timeout(
         Duration::from_secs(30),
         spawn_blocking(move || {
-            execute_tool_sync(&tc, dangerous_commands, require_confirmation)
+            execute_tool_sync(&tc, &dangerous_owned, require_confirmation)
         }),
     )
     .await
-    .unwrap_or_else(|_| tools::ToolResult {
-        success: false,
-        output: format!("Tool '{}' timed out after 30 seconds", func_name),
-    });
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => tools::ToolResult {
+            success: false,
+            output: format!("Tool '{}' execution failed: {}", func_name, e),
+        },
+        Err(_) => tools::ToolResult {
+            success: false,
+            output: format!("Tool '{}' timed out after 30 seconds", func_name),
+        },
+    };
 
     (id, tool_result, func_name)
 }
@@ -1339,74 +1347,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if tool_calls.is_empty() {
                     break;
                 }
+
+                // Execute all tools concurrently via join_all (TOOL-01, TOOL-04)
+                let tasks: Vec<_> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        let tc = tc.clone();
+                        let dangerous = app_config.dangerous_commands.clone();
+                        let require_confirm = app_config.require_confirmation;
+                        async move {
+                            execute_tool_async(tc, &dangerous, require_confirm).await
+                        }
+                    })
+                    .collect();
+
+                let results = join_all(tasks).await;
+
+                // Process results in original order, no TUI events in terminal mode
                 let mut critic_injections: Vec<ChatMessage> = Vec::new();
-
-                for tc in tool_calls {
-                    let id = tc["id"].as_str().unwrap_or("").to_string();
-                    let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                    let args_value = &tc["function"]["arguments"];
-                    let parsed_args = if let Some(raw_str) = args_value.as_str() {
-                        serde_json::from_str::<Value>(raw_str).unwrap_or(json!({}))
-                    } else if args_value.is_object() {
-                        args_value.clone()
-                    } else {
-                        json!({})
-                    };
-
+                for (id, tool_result, func_name) in results.into_iter() {
                     if eval_mode {
                         println!("➜ Tool: {}", func_name);
                     }
 
-                    let simulated_payload = json!({
-                        "name": func_name,
-                        "arguments": parsed_args
-                    });
-
-                    let tool_result = match serde_json::from_value::<ToolCallArgs>(
-                        simulated_payload,
-                    ) {
-                        Ok(ToolCallArgs::RunTerminalCommand(input)) => {
-                            tools::execute_run_terminal_command(
-                                input,
-                                &app_config.dangerous_commands,
-                                app_config.require_confirmation,
-                            )
-                        }
-                        Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
-                        Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
-                        Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
-                        Ok(ToolCallArgs::ListDirectory(input)) => {
-                            tools::execute_list_directory(input)
-                        }
-                        Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-                        Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
-                            success: false,
-                            output: "Tool 'search_codebase' is currently disabled.".to_string(),
-                        },
-                        Err(e) => {
-                            println!(
-                                "[Critic] SCHEMA ERROR — injecting self-correction directive."
-                            );
-                            let correction = format!(
-                                "You sent invalid arguments to the '{}' tool. Schema error: {}. \
-                                Carefully re-read the tool's required parameters and call it again with the correct argument names and types.",
-                                func_name, e
-                            );
-                            critic_injections.push(critic_message(&correction));
-                            temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
-                                0.2
-                            } else {
-                                0.3
-                            };
-                            tools::ToolResult {
-                                success: false,
-                                output: format!(
-                                    "[Schema mismatch — see correction directive above]"
-                                ),
-                            }
-                        }
-                    };
-
+                    // Handle critic injections for failed tools
                     if !tool_result.success && func_name == "run_terminal_command" {
                         println!("[Critic] Command failed — injecting retry directive.");
                         critic_injections.push(critic_message(
@@ -1426,6 +1390,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
 
+                    // Inject ChatMessage with role "tool" (TOOL-03)
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
                         content: Some(tool_result.output),
