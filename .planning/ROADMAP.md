@@ -85,16 +85,16 @@ Plans:
 - [x] 14-01-PLAN.md — Repair streaming parser and token rendering pipeline with regression tests. (completed 2026-03-29)
 - [x] 14-02-PLAN.md — Close UAT gaps for stuck/blank live streaming visibility, tool-phase feedback, and interrupt flush safety. (completed 2026-03-29)
 
-### Phase 15: Chat Mode Polish Foundation
+### [x] Phase 15: Chat Mode Polish Foundation
 
 **Goal:** Implement strict system prompt isolation for chat mode and strip internal reasoning traces from user-visible output.
 **Requirements**: CHAT-01, CHAT-02, CHAT-03, CHAT-04
 **Depends on:** Phase 14
-**Plans:** 0/2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 15-01-PLAN.md: Chat mode system prompt and reasoning filter
-- [ ] 15-02-PLAN.md: Output deduplication and quote normalization
+- [x] 15-01-PLAN.md: Chat mode system prompt and reasoning filter (completed 2026-03-31)
+- [x] 15-02-PLAN.md: Output deduplication and quote normalization (completed 2026-03-31)
 
 ### Phase 16: Live Streaming & Immediate Rendering
 
@@ -112,11 +112,11 @@ Plans:
 **Goal:** Implement async tool spawning, concurrent execution, and status feedback without blocking the orchestrator loop.
 **Requirements**: TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05
 **Depends on:** Phase 16
-**Plans:** 0/2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 17-01-PLAN.md: Async task spawning and tool status UI
-- [ ] 17-02-PLAN.md: Parallel execution, result ordering, and timeouts
+- [x] 17-01-PLAN.md: Async task spawning and tool status UI
+- [x] 17-02-PLAN.md: Parallel execution, result ordering, and timeouts
 
 ### Phase 18: Production Quality & Codebase Consolidation
 
