@@ -62,10 +62,10 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 ## Milestone v1.2 Requirements (Active)
 
 ### Chat Mode Sanity (CHAT)
-- [ ] **CHAT-01**: Strict system prompt enforcement for chat mode that forbids visible reasoning, internal deliberation, and produces direct, concise responses.
-- [ ] **CHAT-02**: Post-processing filter that removes all `<think>`, `<thinking>`, `<analysis>`, and similar internal reasoning markers before display.
-- [ ] **CHAT-03**: Deduplication of consecutive identical phrases/sentences to clean up repeated model outputs.
-- [ ] **CHAT-04**: Normalization of quotes, backticks, and markdown artifacts to ensure professional formatting.
+- [x] **CHAT-01**: Strict system prompt enforcement for chat mode that forbids visible reasoning, internal deliberation, and produces direct, concise responses.
+- [x] **CHAT-02**: Post-processing filter that removes all `<think>`, `<thinking>`, `<analysis>`, and similar internal reasoning markers before display.
+- [x] **CHAT-03**: Deduplication of consecutive identical phrases/sentences to clean up repeated model outputs.
+- [x] **CHAT-04**: Normalization of quotes, backticks, and markdown artifacts to ensure professional formatting.
 
 ### Live Streaming (STREAM)
 - [ ] **STREAM-01**: Raw byte-level reading from SSE stream (not line-buffered) to enable immediate token capture.

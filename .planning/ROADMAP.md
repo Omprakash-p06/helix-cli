@@ -144,10 +144,10 @@ Plans:
 **Goal:** Replace the placeholder TUI shell with the full Phase 19 terminal experience: configurable layout, advanced input and command palette, rich conversation/sidebar rendering, theme support, and responsive terminal feedback.
 **Requirements**: TUI-01, TUI-02, TUI-03, TUI-04, TUI-05
 **Depends on:** Phase 18
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
-- [ ] 19-01-PLAN.md — Shared launch contract, layout flag parsing, and three-region TUI shell.
+- [x] 19-01-PLAN.md — Shared launch contract, layout flag parsing, and three-region TUI shell.
 - [ ] 19-02-PLAN.md — Slash command palette, multiline input HUD, external editor, and theme/config loading.
 - [ ] 19-03-PLAN.md — Rich conversation rendering, sidebar telemetry, preview overlays, and scroll-safe new-message behavior.
 - [ ] 19-04-PLAN.md — Typing/tool progress polish, interrupt/quit UX, regression tests, and clippy-clean validation.
