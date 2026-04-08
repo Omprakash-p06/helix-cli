@@ -12,10 +12,10 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{block::Title, Block, Borders, Clear, Paragraph, Wrap},
 };
 use std::io;
 use std::time::{Duration, Instant};
@@ -72,6 +72,8 @@ pub enum TuiAction {
     SetLayout(api::TuiLayoutMode),
     /// Set a named theme.
     SetTheme(String),
+    /// Open the system editor for multiline input.
+    OpenEditor,
 }
 
 /// Information about a tool being invoked.
@@ -388,13 +390,22 @@ impl TuiApp {
 fn draw(frame: &mut Frame, app: &mut TuiApp) {
     let size = frame.size();
 
+    // Calculate dynamic input height
+    let input_width_est = size.width.saturating_sub(4).max(1);
+    let mut input_lines = 0;
+    for line in &app.multiline_buffer {
+        input_lines += 1 + (line.len() as u16 / input_width_est);
+    }
+    input_lines += 1 + (app.input.value().len() as u16 / input_width_est);
+    let dynamic_input_height = (input_lines + 2).clamp(3, 10);
+
     // Vertical layout: [content area] [input area] [status bar]
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),    // content area (chat + optional sidebar)
-            Constraint::Length(3), // input area
-            Constraint::Length(1), // status bar
+            Constraint::Min(3),                       // content area (chat + optional sidebar)
+            Constraint::Length(dynamic_input_height), // input area
+            Constraint::Length(1),                    // status bar
         ])
         .split(size);
 
@@ -862,10 +873,17 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
         ));
     }
 
+    let ratio = if app.max_tokens > 0 { (app.current_tokens as f64) / (app.max_tokens as f64) } else { 0.0 };
+    let filled = (ratio * 10.0).round() as usize;
+    let empty = 10usize.saturating_sub(filled);
+    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+    let hud = format!(" [{}/{} tok] {} ", app.current_tokens, app.max_tokens, bar);
+
     let input_widget = Paragraph::new(Line::from(spans)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Input (Enter=newline, Alt+Enter=submit) "),
+            .title(Title::from(" Input (Enter=nl, Alt+Enter=sub, Ctrl+E=editor) ").alignment(Alignment::Left))
+            .title(Title::from(hud).alignment(Alignment::Right)),
     );
 
     frame.render_widget(input_widget, area);
@@ -1005,8 +1023,63 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                         if let Ok(ev) = event::read() {
                             match ev {
                                 Event::Key(key) => {
-                                    if !handle_key_event(&mut app, key, &action_tx) {
-                                        break;
+                                    match handle_key_event(&mut app, key, &action_tx) {
+                                        LoopAction::Quit => break,
+                                        LoopAction::OpenEditor => {
+                                            use std::process::Command;
+                                            use std::io::Write;
+                                            use std::fs::File;
+
+                                            // Determine editor
+                                            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
+                                            
+                                            // Write current input to tmp file
+                                            let tmp_dir = std::env::temp_dir();
+                                            let file_path = tmp_dir.join(format!("helix_input_{}.md", std::process::id()));
+                                            
+                                            let current_text = if app.multiline_buffer.is_empty() {
+                                                app.input.value().to_string()
+                                            } else {
+                                                let mut lines = app.multiline_buffer.clone();
+                                                lines.push(app.input.value().to_string());
+                                                lines.join("\n")
+                                            };
+                                            
+                                            if let Ok(mut file) = File::create(&file_path) {
+                                                let _ = file.write_all(current_text.as_bytes());
+                                            }
+
+                                            // Cleanup terminal
+                                            let _ = disable_raw_mode();
+                                            let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+                                            
+                                            // Run editor
+                                            let _ = Command::new(editor).arg(&file_path).status();
+
+                                            // Restore terminal
+                                            let _ = enable_raw_mode();
+                                            let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+                                            let _ = terminal.clear();
+
+                                            // Read back
+                                            if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                                let mut lines: Vec<String> = content.lines().map(String::from).collect();
+                                                if content.ends_with('\n') && !lines.is_empty() {
+                                                    // allow empty last line if trailing newline
+                                                }
+                                                if lines.is_empty() {
+                                                    app.multiline_buffer.clear();
+                                                    app.input.reset();
+                                                } else {
+                                                    let last = lines.pop().unwrap_or_default();
+                                                    app.multiline_buffer = lines;
+                                                    app.input = Input::new(last);
+                                                }
+                                                let _ = std::fs::remove_file(&file_path);
+                                            }
+                                            app.status_text = "Editor closed".to_string();
+                                        }
+                                        LoopAction::Continue => {}
                                     }
                                 }
                                 Event::Resize(_, _) => {
@@ -1146,11 +1219,18 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
 }
 
 /// Handle a key event. Returns false if the app should quit.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoopAction {
+    Continue,
+    Quit,
+    OpenEditor,
+}
+
 fn handle_key_event(
     app: &mut TuiApp,
     key: KeyEvent,
     action_tx: &mpsc::UnboundedSender<TuiAction>,
-) -> bool {
+) -> LoopAction {
     match app.input_mode {
         InputMode::Help => {
             // Any key leaves help mode.
@@ -1179,16 +1259,16 @@ fn handle_key_event(
                     if app.is_generating {
                         let _ = action_tx.send(TuiAction::Interrupt);
                         app.status_text = "Interrupting...".to_string();
-                        return true; // Don't quit, just interrupt
+                        return LoopAction::Continue; // Don't quit, just interrupt
                     } else {
                         let _ = action_tx.send(TuiAction::Quit);
-                        return false;
+                        return LoopAction::Quit;
                     }
                 }
                 // Ctrl+D = quit
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let _ = action_tx.send(TuiAction::Quit);
-                    return false;
+                    return LoopAction::Quit;
                 }
 
                 // Ctrl+T = toggle think block visibility
@@ -1211,6 +1291,11 @@ fn handle_key_event(
                     };
                 }
 
+                // Ctrl+E = open external editor
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return LoopAction::OpenEditor;
+                }
+
                 // Alt+Enter = submit (go to preview)
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
                     let current = app.input.value().to_string();
@@ -1227,7 +1312,7 @@ fn handle_key_event(
                         let trimmed = full_text.trim();
                         if trimmed == "/quit" || trimmed == "/exit" {
                             let _ = action_tx.send(TuiAction::Quit);
-                            return false;
+                            return LoopAction::Quit;
                         } else if trimmed == "/help" {
                             app.input_mode = InputMode::Help;
                             app.input.reset();
@@ -1251,12 +1336,14 @@ fn handle_key_event(
                     app.add_newline();
                 }
 
-                // Tab = accept ghost suggestion
-                KeyCode::Tab => {
+                // Tab or Right = accept ghost suggestion
+                KeyCode::Tab | KeyCode::Right => {
                     if let Some(suggestion) = app.ghost_suggestion() {
                         let current = app.input.value().to_string();
                         let completed = format!("{}{}", current, suggestion);
                         app.input = Input::new(completed);
+                    } else if key.code == KeyCode::Right {
+                        app.input.handle_event(&Event::Key(key));
                     }
                 }
 
@@ -1316,12 +1403,12 @@ fn handle_key_event(
             }
         }
     }
-    true
+    LoopAction::Continue
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TuiApp, api, handle_key_event, truncate_preview_preserving_utf8};
+    use super::{TuiApp, api, handle_key_event, truncate_preview_preserving_utf8, LoopAction};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tokio::sync::mpsc;
     use tui_input::Input;
@@ -1374,7 +1461,7 @@ mod tests {
             &action_tx,
         );
 
-        assert!(keep_running);
+        assert_eq!(keep_running, LoopAction::Continue);
         assert_eq!(app.scroll_offset, 2);
     }
 
@@ -1391,7 +1478,7 @@ mod tests {
             &action_tx,
         );
 
-        assert!(keep_running);
+        assert_eq!(keep_running, LoopAction::Continue);
         assert_eq!(app.scroll_offset, 2);
     }
 }

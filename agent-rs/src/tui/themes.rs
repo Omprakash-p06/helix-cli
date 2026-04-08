@@ -42,6 +42,7 @@ impl ThemeName {
             ThemeName::Light => ThemeColorSet::light(),
             ThemeName::Nord => ThemeColorSet::nord(),
             ThemeName::Gruvbox => ThemeColorSet::gruvbox(),
+            ThemeName::Custom => load_custom_theme().unwrap_or_else(ThemeColorSet::dark),
         }
     }
 }
@@ -278,7 +279,8 @@ mod tests {
         assert_eq!(ThemeName::Dark.next(), ThemeName::Light);
         assert_eq!(ThemeName::Light.next(), ThemeName::Nord);
         assert_eq!(ThemeName::Nord.next(), ThemeName::Gruvbox);
-        assert_eq!(ThemeName::Gruvbox.next(), ThemeName::Dark);
+        assert_eq!(ThemeName::Gruvbox.next(), ThemeName::Custom);
+        assert_eq!(ThemeName::Custom.next(), ThemeName::Dark);
     }
 
     #[test]
@@ -316,3 +318,55 @@ mod tests {
         assert_eq!(parse_hex_color(""), None);
     }
 }
+
+pub fn load_custom_theme() -> Option<ThemeColorSet> {
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{}/.config/helix-agent/theme.toml", home);
+    let content = std::fs::read_to_string(path).ok()?;
+    
+    let mut colors = ThemeColorSet::dark();
+    let mut in_colors = false;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_colors = line == "[colors]";
+            continue;
+        }
+        if !in_colors || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if let Some((key, val)) = line.split_once('=') {
+            let key = key.trim();
+            let val = val.trim().trim_matches('"').trim_matches('\'');
+            if let Some(col) = parse_hex_color(val) {
+                match key {
+                    "background" => colors.background = col,
+                    "foreground" => colors.foreground = col,
+                    "primary" => colors.primary = col,
+                    "secondary" => colors.secondary = col,
+                    "accent" => colors.accent = col,
+                    "border" => colors.border = col,
+                    "border_focused" => colors.border_focused = col,
+                    "title" => colors.title = col,
+                    "subtitle" => colors.subtitle = col,
+                    "user_message" => colors.user_message = col,
+                    "assistant_message" => colors.assistant_message = col,
+                    "system_message" => colors.system_message = col,
+                    "tool_message" => colors.tool_message = col,
+                    "error" => colors.error = col,
+                    "success" => colors.success = col,
+                    "warning" => colors.warning = col,
+                    "info" => colors.info = col,
+                    "ghost_text" => colors.ghost_text = col,
+                    "selection" => colors.selection = col,
+                    "scrollbar" => colors.scrollbar = col,
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(colors)
+}
+

@@ -11,6 +11,7 @@ pub enum ThemeName {
     Light,
     Nord,
     Gruvbox,
+    Custom,
 }
 
 impl ThemeName {
@@ -19,7 +20,8 @@ impl ThemeName {
             ThemeName::Dark => ThemeName::Light,
             ThemeName::Light => ThemeName::Nord,
             ThemeName::Nord => ThemeName::Gruvbox,
-            ThemeName::Gruvbox => ThemeName::Dark,
+            ThemeName::Gruvbox => ThemeName::Custom,
+            ThemeName::Custom => ThemeName::Dark,
         }
     }
 }
