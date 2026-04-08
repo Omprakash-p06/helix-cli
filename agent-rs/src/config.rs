@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub require_confirmation: bool,
     pub dangerous_commands: Vec<String>,
     pub exec_mode: String,
+    pub chat_system_prompt: String,
+    pub agentic_system_prompt: String,
 }
 
 impl AppConfig {
@@ -39,6 +41,8 @@ try:
         "require_confirmation": getattr(config, 'REQUIRE_CONFIRMATION', True),
         "dangerous_commands": getattr(config, 'DANGEROUS_COMMANDS', ["rm", "mv"]),
         "exec_mode": os.environ.get("HELIX_EXEC_MODE", "chat"),
+        "chat_system_prompt": getattr(config, 'CHAT_SYSTEM_PROMPT', 'You are Helix running in chat mode. Reply directly and concisely. Never expose internal reasoning, analysis, or chain-of-thought. Do not output <think>, <thinking>, or <analysis> tags.'),
+        "agentic_system_prompt": getattr(config, 'AGENTIC_SYSTEM_PROMPT', 'You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths - verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise. You have local tool access through these tools, so do not ask the user to run local file-system commands when a tool can do it.'),
     }
     print(json.dumps(data))
 except Exception as e:

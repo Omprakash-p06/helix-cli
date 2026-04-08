@@ -40,3 +40,5 @@ koboldcpp-linux-x64
 
 # Active debug scratch notes (resolved artifacts can still be committed)
 .planning/debug/*.md
+init_map.json
+.codex

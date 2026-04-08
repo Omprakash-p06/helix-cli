@@ -1,7 +1,7 @@
 // Nyquist validation tests for Phase 17: Non-Blocking Tool Execution
 // Covers: TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TOOL-01: Async tool execution via spawn_blocking
@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 /// Verify execute_tool_sync dispatches correctly for each tool type.
 /// This tests the synchronous core that runs on the blocking thread pool.
 mod tool_dispatch {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// Helper: build a tool call Value
     fn tool_call(name: &str, args: Value) -> Value {
