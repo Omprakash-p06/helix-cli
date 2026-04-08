@@ -44,9 +44,7 @@ async fn execute_tool_async(
     let dangerous_owned = dangerous_commands.to_vec();
     let tool_result = match timeout(
         Duration::from_secs(30),
-        spawn_blocking(move || {
-            execute_tool_sync(&tc, &dangerous_owned, require_confirmation)
-        }),
+        spawn_blocking(move || execute_tool_sync(&tc, &dangerous_owned, require_confirmation)),
     )
     .await
     {
@@ -731,11 +729,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     let eval_mode = initial_prompt.is_some();
 
+    // Parse --layout flag (wide or compact, default wide)
+    let layout_mode = args
+        .iter()
+        .position(|r| r == "--layout")
+        .and_then(|idx| args.get(idx + 1))
+        .map(|s| tui::api::TuiLayoutMode::from_str_or_default(s))
+        .unwrap_or(tui::api::TuiLayoutMode::Wide);
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // TUI Mode: ratatui-based interactive terminal with streaming & spans
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if ui_mode == "tui" {
-        let (mut action_rx, event_tx) = tui::run_tui().await?;
+        let (mut action_rx, event_tx) = tui::run_tui(layout_mode).await?;
 
         // Initialize HUD context
         let current_tokens = tokens::count_message_tokens(&messages);
@@ -908,6 +914,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             c
                         )));
                     }
+                }
+                Some(_) => {
+                    // Additional UI-local actions are handled by the TUI loop.
                 }
             }
         }
@@ -1358,7 +1367,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let dangerous = app_config.dangerous_commands.clone();
                         let require_confirm = app_config.require_confirmation;
                         async move {
-                            (idx, execute_tool_async(tc, &dangerous, require_confirm).await)
+                            (
+                                idx,
+                                execute_tool_async(tc, &dangerous, require_confirm).await,
+                            )
                         }
                     })
                     .collect();
@@ -1880,7 +1892,10 @@ async fn run_llm_loop_tui(
                     let dangerous = app_config.dangerous_commands.clone();
                     let require_confirm = app_config.require_confirmation;
                     async move {
-                        (idx, execute_tool_async(tc, &dangerous, require_confirm).await)
+                        (
+                            idx,
+                            execute_tool_async(tc, &dangerous, require_confirm).await,
+                        )
                     }
                 })
                 .collect();

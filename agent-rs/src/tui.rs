@@ -1,4 +1,9 @@
 #![allow(dead_code)]
+pub mod api;
+pub mod commands;
+pub mod events;
+pub mod state;
+pub mod themes;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -37,6 +42,36 @@ pub enum TuiAction {
     Interrupt,
     /// System command issued.
     SystemCommand(String),
+    /// Cancel current input.
+    CancelInput,
+    /// Start a new chat session.
+    NewChat,
+    /// Clear conversation history.
+    ClearHistory,
+    /// Toggle sidebar visibility.
+    ToggleSidebar,
+    /// Cycle to next theme.
+    ToggleTheme,
+    /// Scroll conversation up.
+    ScrollUp,
+    /// Scroll conversation down.
+    ScrollDown,
+    /// Scroll conversation up by half page.
+    ScrollPageUp,
+    /// Scroll conversation down by half page.
+    ScrollPageDown,
+    /// Show help overlay.
+    ShowHelp,
+    /// Open the command palette.
+    OpenCommandPalette,
+    /// Close the command palette.
+    CloseCommandPalette,
+    /// Select a command from the palette by index.
+    SelectCommand(usize),
+    /// Set the TUI layout mode.
+    SetLayout(api::TuiLayoutMode),
+    /// Set a named theme.
+    SetTheme(String),
 }
 
 /// Information about a tool being invoked.
@@ -79,6 +114,17 @@ pub enum TuiEvent {
     ContextUpdate(usize, usize),
     /// Wipe visual UI memory.
     ClearHistory,
+    /// Theme was changed.
+    ThemeChanged(state::ThemeName),
+    /// Full context snapshot for sidebar and status bar.
+    ContextSnapshot {
+        tokens_used: usize,
+        max_tokens: usize,
+        files: Vec<api::ContextFileEntry>,
+        model_name: String,
+        exec_mode: String,
+        connection: api::ConnectionState,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -806,9 +852,10 @@ fn truncate_preview_preserving_utf8(input: &str, max_chars: usize) -> String {
 
 /// Run the TUI event loop. Returns channels for communication with the orchestrator.
 ///
+/// - `layout_mode`: the initial layout mode (Wide or Compact).
 /// - `action_rx`: orchestrator reads user actions (Submit / Quit) from this.
 /// - `event_tx`: orchestrator sends streaming events (Token, ToolCall, etc.) to this.
-pub async fn run_tui() -> io::Result<(
+pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
     mpsc::UnboundedReceiver<TuiAction>,
     mpsc::UnboundedSender<TuiEvent>,
 )> {
@@ -947,6 +994,21 @@ pub async fn run_tui() -> io::Result<(
                                     },
                                 }],
                             });
+                        }
+                        TuiEvent::ThemeChanged(_theme) => {
+                            // Theme changes are handled by the state module;
+                            // just trigger a redraw (which happens automatically).
+                        }
+                        TuiEvent::ContextSnapshot {
+                            tokens_used,
+                            max_tokens,
+                            files: _files,
+                            model_name: _model,
+                            exec_mode: _mode,
+                            connection: _conn,
+                        } => {
+                            app.current_tokens = tokens_used;
+                            app.max_tokens = max_tokens;
                         }
                     }
                 }
