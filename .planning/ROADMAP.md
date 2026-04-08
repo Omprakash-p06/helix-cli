@@ -128,6 +128,16 @@ Plans:
 Plans:
 - [ ] 18-01-PLAN.md: Types refactor, code cleanup, tracing, and tests
 
+### Phase 19: TUI redesign
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 18
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 19 to break down)
+
 ---
 
 ## [x] Phase 6: Memory Management & Fallback
