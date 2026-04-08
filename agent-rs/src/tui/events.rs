@@ -81,13 +81,14 @@ pub fn handle_command_palette_input(key: KeyEvent, state: &mut TuiState) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
 
     #[test]
     fn esc_closes_palette() {
         let mut state = TuiState::new();
         state.command_palette.visible = true;
         let action = handle_command_palette_input(
-            KeyEvent::new(KeyCode::Esc, Default::default()),
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             &mut state,
         );
         assert!(matches!(action, Some(TuiAction::CloseCommandPalette)));
@@ -98,7 +99,7 @@ mod tests {
     fn char_appends_filter() {
         let mut state = TuiState::new();
         let action = handle_command_palette_input(
-            KeyEvent::new(KeyCode::Char('h'), Default::default()),
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
             &mut state,
         );
         assert!(action.is_none());
@@ -112,7 +113,7 @@ mod tests {
         // Select first command (should be /help)
         state.command_palette.selected_index = 0;
         let action = handle_command_palette_input(
-            KeyEvent::new(KeyCode::Enter, Default::default()),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &mut state,
         );
         assert!(matches!(action, Some(TuiAction::SelectCommand(_))));

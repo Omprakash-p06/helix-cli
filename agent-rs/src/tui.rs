@@ -178,10 +178,16 @@ pub struct TuiApp {
     pub cwd: String,
     pub current_tokens: usize,
     pub max_tokens: usize,
+    // ── Phase 19 additions ──
+    layout_mode: api::TuiLayoutMode,
+    sidebar_visible: bool,
+    model_name: String,
+    exec_mode_label: String,
+    connection_label: String,
 }
 
 impl TuiApp {
-    pub fn new() -> Self {
+    pub fn new(layout_mode: api::TuiLayoutMode) -> Self {
         let no_color = std::env::var("NO_COLOR").is_ok();
         Self {
             input: Input::default(),
@@ -205,6 +211,11 @@ impl TuiApp {
             cwd: Self::get_formatted_cwd(),
             current_tokens: 0,
             max_tokens: 8192,
+            layout_mode,
+            sidebar_visible: true,
+            model_name: String::new(),
+            exec_mode_label: String::new(),
+            connection_label: String::from("connecting"),
         }
     }
 
@@ -377,17 +388,34 @@ impl TuiApp {
 fn draw(frame: &mut Frame, app: &mut TuiApp) {
     let size = frame.size();
 
-    // Layout: [banner/chat area] [input area] [status bar]
+    // Vertical layout: [content area] [input area] [status bar]
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),    // chat area
+            Constraint::Min(3),    // content area (chat + optional sidebar)
             Constraint::Length(3), // input area
             Constraint::Length(1), // status bar
         ])
         .split(size);
 
-    draw_chat_area(frame, app, chunks[0]);
+    // Top row: conversation + optional sidebar
+    if app.sidebar_visible && size.width > 60 {
+        let sidebar_pct = app.layout_mode.sidebar_percent();
+        let main_pct = 100 - sidebar_pct;
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(main_pct),
+                Constraint::Percentage(sidebar_pct),
+            ])
+            .split(chunks[0]);
+
+        draw_chat_area(frame, app, horizontal[0]);
+        draw_sidebar(frame, app, horizontal[1]);
+    } else {
+        draw_chat_area(frame, app, chunks[0]);
+    }
+
     draw_input_area(frame, app, chunks[1]);
     draw_status_bar(frame, app, chunks[2]);
 
@@ -397,6 +425,82 @@ fn draw(frame: &mut Frame, app: &mut TuiApp) {
     } else if app.input_mode == InputMode::Help {
         draw_help_overlay(frame, app, size);
     }
+}
+
+/// Render the sidebar with context files and session info.
+fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Section: Session Info
+    let header_style = if app.no_color {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    };
+    let dim_style = if app.no_color {
+        Style::default().add_modifier(Modifier::DIM)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    lines.push(Line::from(Span::styled("📊 Session", header_style)));
+    if !app.model_name.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  model: {}", app.model_name),
+            dim_style,
+        )));
+    }
+    if !app.exec_mode_label.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  mode: {}", app.exec_mode_label),
+            dim_style,
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        format!("  {}", app.connection_label),
+        dim_style,
+    )));
+    lines.push(Line::from(""));
+
+    // Section: Token Usage
+    lines.push(Line::from(Span::styled("📈 Tokens", header_style)));
+    let ratio = if app.max_tokens > 0 {
+        (app.current_tokens as f64) / (app.max_tokens as f64)
+    } else {
+        0.0
+    };
+    let filled = (ratio * 10.0).round() as usize;
+    let empty = 10usize.saturating_sub(filled);
+    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+    lines.push(Line::from(Span::styled(
+        format!("  [{}/{}]", app.current_tokens, app.max_tokens),
+        dim_style,
+    )));
+    lines.push(Line::from(Span::styled(format!("  {}", bar), dim_style)));
+    lines.push(Line::from(""));
+
+    // Section: Keyboard Shortcuts
+    lines.push(Line::from(Span::styled("⌨ Keys", header_style)));
+    lines.push(Line::from(Span::styled("  Ctrl+B sidebar", dim_style)));
+    lines.push(Line::from(Span::styled("  Ctrl+T thoughts", dim_style)));
+    lines.push(Line::from(Span::styled("  Alt+⏎  submit", dim_style)));
+
+    let sidebar = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Context ")
+                .style(Style::default().fg(if app.no_color {
+                    Color::Reset
+                } else {
+                    Color::DarkGray
+                })),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(sidebar, area);
 }
 
 fn draw_help_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
@@ -774,14 +878,27 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
-    let char_count = app.input.value().len();
-    let ml_count = app.multiline_buffer.len();
-
+    // Build left segment: model | mode | status
+    let model_part = if !app.model_name.is_empty() {
+        format!("model: {} | ", app.model_name)
+    } else {
+        String::new()
+    };
+    let mode_part = if !app.exec_mode_label.is_empty() {
+        format!("{} mode | ", app.exec_mode_label)
+    } else {
+        String::new()
+    };
     let left = format!(
-        " {} | Context: [{} / {}] ",
-        app.status_text, app.current_tokens, app.max_tokens
+        " {}{}{} ",
+        model_part, mode_part, app.status_text
     );
-    let right = format!(" chars: {} | lines: {} ", char_count, ml_count + 1);
+
+    // Build right segment: [current/max tok] | connection
+    let right = format!(
+        " [{}/{} tok] | {} ",
+        app.current_tokens, app.max_tokens, app.connection_label
+    );
 
     let bar_width = area.width as usize;
     let padding = bar_width.saturating_sub(left.len() + right.len());
@@ -870,7 +987,7 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
-        let mut app = TuiApp::new();
+        let mut app = TuiApp::new(layout_mode);
 
         loop {
             // Draw
@@ -1003,12 +1120,15 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                             tokens_used,
                             max_tokens,
                             files: _files,
-                            model_name: _model,
-                            exec_mode: _mode,
-                            connection: _conn,
+                            model_name,
+                            exec_mode,
+                            connection,
                         } => {
                             app.current_tokens = tokens_used;
                             app.max_tokens = max_tokens;
+                            app.model_name = model_name;
+                            app.exec_mode_label = exec_mode;
+                            app.connection_label = connection.to_string();
                         }
                     }
                 }
@@ -1078,6 +1198,16 @@ fn handle_key_event(
                         "Thinking blocks: visible".to_string()
                     } else {
                         "Thinking blocks: hidden".to_string()
+                    };
+                }
+
+                // Ctrl+B = toggle sidebar
+                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.sidebar_visible = !app.sidebar_visible;
+                    app.status_text = if app.sidebar_visible {
+                        "Sidebar: visible".to_string()
+                    } else {
+                        "Sidebar: hidden".to_string()
                     };
                 }
 
@@ -1191,7 +1321,7 @@ fn handle_key_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{TuiApp, handle_key_event, truncate_preview_preserving_utf8};
+    use super::{TuiApp, api, handle_key_event, truncate_preview_preserving_utf8};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tokio::sync::mpsc;
     use tui_input::Input;
@@ -1221,7 +1351,7 @@ mod tests {
 
     #[test]
     fn submit_resets_scroll_offset_to_latest() {
-        let mut app = TuiApp::new();
+        let mut app = TuiApp::new(api::TuiLayoutMode::Wide);
         app.scroll_offset = 7;
         app.input = Input::new("hello".to_string());
 
@@ -1233,7 +1363,7 @@ mod tests {
 
     #[test]
     fn up_scroll_respects_max_scroll_offset() {
-        let mut app = TuiApp::new();
+        let mut app = TuiApp::new(api::TuiLayoutMode::Wide);
         app.max_scroll_offset = 2;
         app.scroll_offset = 2;
         let (action_tx, _action_rx) = mpsc::unbounded_channel();
@@ -1250,7 +1380,7 @@ mod tests {
 
     #[test]
     fn down_scroll_moves_towards_latest_response() {
-        let mut app = TuiApp::new();
+        let mut app = TuiApp::new(api::TuiLayoutMode::Wide);
         app.max_scroll_offset = 10;
         app.scroll_offset = 3;
         let (action_tx, _action_rx) = mpsc::unbounded_channel();
