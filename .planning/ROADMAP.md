@@ -212,10 +212,10 @@ Plans:
 **Requirements**: PERF-04, PERF-05
 **Depends on:** Phase 21
 **Gap Closure:** Closes vulnerabilities 3.1 and 3.2 with measurable runtime reliability improvements.
-**Plans:** 0/0 plans complete
+**Plans:** 0/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 23 to break down)
+- [ ] 23-01-PLAN.md — Runtime profile contracts, watchdog recovery policy, and cross-layer verification.
 
 ### Phase 24: Enterprise Audit Log MVP
 **Goal:** Add structured, queryable audit logging for tool invocations and security decisions to support enterprise trust requirements.
