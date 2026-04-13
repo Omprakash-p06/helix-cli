@@ -96,6 +96,15 @@ pub fn default_commands() -> Vec<Command> {
             immediate: false,
         },
         Command {
+            id: "resume".into(),
+            name: "/resume".into(),
+            description: "Resume the latest autosaved session".into(),
+            example: "/resume".into(),
+            shortcut: None,
+            category: CommandCategory::Session,
+            immediate: true,
+        },
+        Command {
             id: "export".into(),
             name: "/export".into(),
             description: "Export conversation to markdown file".into(),
@@ -140,6 +149,9 @@ pub fn execute_command(cmd: &Command) -> Option<TuiAction> {
         "clear" => Some(TuiAction::SystemCommand("/clear".into())),
         "agent" => Some(TuiAction::SystemCommand("/mode agentic".into())),
         "chat" => Some(TuiAction::SystemCommand("/mode chat".into())),
+        "save" => Some(TuiAction::SystemCommand("/save".into())),
+        "load" => Some(TuiAction::SystemCommand("/load".into())),
+        "resume" => Some(TuiAction::SystemCommand("/resume".into())),
         "quit" => Some(TuiAction::Quit),
         _ => None,
     }
@@ -171,13 +183,14 @@ mod tests {
     #[test]
     fn default_commands_have_expected_baseline() {
         let cmds = default_commands();
-        assert!(cmds.len() >= 10);
+        assert!(cmds.len() >= 11);
         assert!(cmds.iter().any(|c| c.id == "help"));
         assert!(cmds.iter().any(|c| c.id == "theme"));
         assert!(cmds.iter().any(|c| c.id == "quit"));
         assert!(cmds.iter().any(|c| c.id == "clear"));
         assert!(cmds.iter().any(|c| c.id == "agent"));
         assert!(cmds.iter().any(|c| c.id == "chat"));
+        assert!(cmds.iter().any(|c| c.id == "resume"));
     }
 
     #[test]
@@ -192,6 +205,20 @@ mod tests {
             immediate: true,
         };
         assert!(matches!(execute_command(&cmd), Some(TuiAction::ShowHelp)));
+
+        let resume = Command {
+            id: "resume".to_string(),
+            name: "/resume".to_string(),
+            description: "Resume latest".to_string(),
+            example: "/resume".to_string(),
+            shortcut: None,
+            category: CommandCategory::Session,
+            immediate: true,
+        };
+        assert!(matches!(
+            execute_command(&resume),
+            Some(TuiAction::SystemCommand(cmd)) if cmd == "/resume"
+        ));
     }
 
     #[test]
@@ -214,14 +241,23 @@ mod tests {
     #[test]
     fn immediate_commands_are_correct() {
         let cmds = default_commands();
-        let immediate_ids: Vec<&str> = cmds.iter().filter(|c| c.immediate).map(|c| c.id.as_str()).collect();
+        let immediate_ids: Vec<&str> = cmds
+            .iter()
+            .filter(|c| c.immediate)
+            .map(|c| c.id.as_str())
+            .collect();
         assert!(immediate_ids.contains(&"help"));
         assert!(immediate_ids.contains(&"clear"));
         assert!(immediate_ids.contains(&"agent"));
         assert!(immediate_ids.contains(&"chat"));
+        assert!(immediate_ids.contains(&"resume"));
         assert!(immediate_ids.contains(&"quit"));
         // Non-immediate
-        let non_immediate: Vec<&str> = cmds.iter().filter(|c| !c.immediate).map(|c| c.id.as_str()).collect();
+        let non_immediate: Vec<&str> = cmds
+            .iter()
+            .filter(|c| !c.immediate)
+            .map(|c| c.id.as_str())
+            .collect();
         assert!(non_immediate.contains(&"model"));
         assert!(non_immediate.contains(&"theme"));
         assert!(non_immediate.contains(&"layout"));

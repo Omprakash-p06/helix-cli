@@ -1,5 +1,7 @@
 mod config;
 mod input;
+mod session;
+mod security;
 mod server;
 mod stream;
 mod tokens;
@@ -8,6 +10,7 @@ mod tui;
 pub mod types;
 mod utils;
 
+use crate::security::policy::{PolicyContext, PolicyDecision, evaluate_tool_call};
 use futures_util::future::join_all;
 use reqwest::Client;
 use rustyline::error::ReadlineError;
@@ -37,6 +40,7 @@ async fn execute_tool_async(
     tc: Value,
     dangerous_commands: &[String],
     require_confirmation: bool,
+    policy_context: PolicyContext,
 ) -> (String, tools::ToolResult, String) {
     let id = tc["id"].as_str().unwrap_or("").to_string();
     let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
@@ -44,7 +48,9 @@ async fn execute_tool_async(
     let dangerous_owned = dangerous_commands.to_vec();
     let tool_result = match timeout(
         Duration::from_secs(30),
-        spawn_blocking(move || execute_tool_sync(&tc, &dangerous_owned, require_confirmation)),
+        spawn_blocking(move || {
+            execute_tool_sync(&tc, &dangerous_owned, require_confirmation, &policy_context)
+        }),
     )
     .await
     {
@@ -68,6 +74,7 @@ fn execute_tool_sync(
     tc: &Value,
     dangerous_commands: &[String],
     require_confirmation: bool,
+    policy_context: &PolicyContext,
 ) -> tools::ToolResult {
     let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
     let args_value = &tc["function"]["arguments"];
@@ -84,10 +91,43 @@ fn execute_tool_sync(
         "arguments": parsed_args
     });
 
-    match serde_json::from_value::<tools::ToolCallArgs>(simulated_payload) {
-        Ok(ToolCallArgs::RunTerminalCommand(input)) => {
-            tools::execute_run_terminal_command(input, dangerous_commands, require_confirmation)
+    match evaluate_tool_call(
+        tc["function"]["name"].as_str().unwrap_or(""),
+        &parsed_args,
+        policy_context,
+    ) {
+        PolicyDecision::Allow => {}
+        PolicyDecision::RequireApproval {
+            reason_code,
+            message,
+        } => {
+            return tools::ToolResult {
+                success: false,
+                output: format!("[Approval Required: {}] {}", reason_code, message),
+            };
         }
+        PolicyDecision::Deny {
+            reason_code,
+            message,
+            remediation,
+        } => {
+            return tools::ToolResult {
+                success: false,
+                output: format!(
+                    "[Policy Denied: {}] {} Remediation: {}",
+                    reason_code, message, remediation
+                ),
+            };
+        }
+    }
+
+    match serde_json::from_value::<tools::ToolCallArgs>(simulated_payload) {
+        Ok(ToolCallArgs::RunTerminalCommand(input)) => tools::execute_run_terminal_command(
+            input,
+            dangerous_commands,
+            require_confirmation,
+            policy_context,
+        ),
         Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
         Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
         Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
@@ -220,26 +260,26 @@ fn extract_visible_stream_choice_text(
     choice: &Value,
     is_chat_mode: bool,
 ) -> Option<(String, bool)> {
-    if let Some(delta) = choice.get("delta") {
-        if let Some(result) = extract_visible_delta_text(delta, is_chat_mode) {
-            return Some(result);
-        }
+    if let Some(delta) = choice.get("delta")
+        && let Some(result) = extract_visible_delta_text(delta, is_chat_mode)
+    {
+        return Some(result);
     }
 
     if let Some(result) = extract_visible_message_or_choice_text(choice) {
         return Some(result);
     }
 
-    if let Some(message) = choice.get("message") {
-        if let Some(result) = extract_visible_message_or_choice_text(message) {
-            return Some(result);
-        }
+    if let Some(message) = choice.get("message")
+        && let Some(result) = extract_visible_message_or_choice_text(message)
+    {
+        return Some(result);
     }
 
     None
 }
 
-fn extract_stream_tool_calls<'a>(choice: &'a Value) -> Option<&'a Vec<Value>> {
+fn extract_stream_tool_calls(choice: &Value) -> Option<&Vec<Value>> {
     if let Some(delta_calls) = choice
         .get("delta")
         .and_then(|d| d.get("tool_calls"))
@@ -304,12 +344,11 @@ fn read_server_stderr_log() -> Option<String> {
         "../logs/start_server.stderr.log",
     ];
     for path in candidates {
-        if std::path::Path::new(path).exists() {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if !content.trim().is_empty() {
-                    return Some(content);
-                }
-            }
+        if std::path::Path::new(path).exists()
+            && let Ok(content) = std::fs::read_to_string(path)
+            && !content.trim().is_empty()
+        {
+            return Some(content);
         }
     }
     None
@@ -359,18 +398,19 @@ fn read_config_layer_values() -> (Option<String>, Option<String>) {
                     continue;
                 }
 
-                if gpu_layers.is_none() && line.starts_with("GPU_LAYERS") {
-                    if let Some((_, rhs)) = line.split_once('=') {
-                        gpu_layers =
-                            Some(rhs.trim().trim_matches('"').trim_matches('\'').to_string());
-                    }
+                if gpu_layers.is_none()
+                    && line.starts_with("GPU_LAYERS")
+                    && let Some((_, rhs)) = line.split_once('=')
+                {
+                    gpu_layers = Some(rhs.trim().trim_matches('"').trim_matches('\'').to_string());
                 }
 
-                if fallback_gpu_layers.is_none() && line.starts_with("FALLBACK_GPU_LAYERS") {
-                    if let Some((_, rhs)) = line.split_once('=') {
-                        fallback_gpu_layers =
-                            Some(rhs.trim().trim_matches('"').trim_matches('\'').to_string());
-                    }
+                if fallback_gpu_layers.is_none()
+                    && line.starts_with("FALLBACK_GPU_LAYERS")
+                    && let Some((_, rhs)) = line.split_once('=')
+                {
+                    fallback_gpu_layers =
+                        Some(rhs.trim().trim_matches('"').trim_matches('\'').to_string());
                 }
             }
 
@@ -441,6 +481,15 @@ fn sync_system_prompt_message(messages: &mut Vec<ChatMessage>, system_prompt: &s
             },
         );
     }
+}
+
+fn autosave_session_snapshot(
+    messages: &[ChatMessage],
+    app_config: &config::AppConfig,
+    exec_mode: &str,
+    ui_mode: &str,
+) -> Result<std::path::PathBuf, String> {
+    session::save_latest(&app_config.model_name, exec_mode, ui_mode, messages)
 }
 
 fn chat_max_tokens() -> usize {
@@ -538,10 +587,10 @@ fn resolve_server_launch_context() -> Option<(&'static str, &'static str)> {
 }
 
 fn open_log_file(path: &str) -> Option<std::fs::File> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let _ = std::fs::create_dir_all(parent);
     }
 
     std::fs::OpenOptions::new()
@@ -742,17 +791,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if ui_mode == "tui" {
         let (mut action_rx, event_tx) = tui::run_tui(layout_mode).await?;
+        let tui_connection_state = if server_flavor == ServerFlavor::Unknown {
+            tui::api::ConnectionState::Connecting
+        } else {
+            tui::api::ConnectionState::Connected
+        };
 
         // Initialize HUD context
         let current_tokens = tokens::count_message_tokens(&messages);
         let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
             current_tokens,
-            app_config.context_size as usize,
+            app_config.context_size,
         ));
+        let _ = event_tx.send(tui::TuiEvent::ContextSnapshot {
+            tokens_used: current_tokens,
+            max_tokens: app_config.context_size,
+            files: Vec::new(),
+            model_name: app_config.model_name.clone(),
+            exec_mode: exec_mode.clone(),
+            connection: tui_connection_state.clone(),
+        });
         let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
             "[Mode] {} mode active. Use `/mode chat` or `/mode agentic`.",
             exec_mode
         )));
+
+        let resume_requested = std::env::var("HELIX_RESUME_SESSION")
+            .ok()
+            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "y"))
+            .unwrap_or(false);
+
+        if resume_requested {
+            match session::load_latest() {
+                Ok(saved) => {
+                    messages = saved.messages;
+                    sync_system_prompt_message(&mut messages, &system_prompt);
+                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                        "[Session] Resumed latest autosave.".to_string(),
+                    ));
+                }
+                Err(err) => {
+                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                        "[Session] Resume failed: {}",
+                        err
+                    )));
+                }
+            }
+        } else if session::has_latest() {
+            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                "[Session] Autosave detected. Use `/resume` to restore it.".to_string(),
+            ));
+        }
 
         // If there's an initial prompt, send it immediately
         if let Some(prompt) = initial_prompt.take() {
@@ -763,6 +852,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tool_call_id: None,
                 name: None,
             });
+            let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
             // Process the initial prompt through the LLM loop
             run_llm_loop_tui(
                 &client,
@@ -777,6 +867,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &event_tx,
             )
             .await;
+            let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
             if eval_mode {
                 return Ok(());
             }
@@ -793,6 +884,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tool_call_id: None,
                         name: None,
                     });
+                    let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
                     run_llm_loop_tui(
                         &client,
                         &url,
@@ -806,8 +898,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &event_tx,
                     )
                     .await;
+                    let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
                 }
                 Some(tui::TuiAction::Quit) | None => {
+                    let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
                     break;
                 }
                 Some(tui::TuiAction::Interrupt) => {
@@ -828,8 +922,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let current_tokens = tokens::count_message_tokens(&messages);
                         let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
                             current_tokens,
-                            app_config.context_size as usize,
+                            app_config.context_size,
                         ));
+                        let _ = event_tx.send(tui::TuiEvent::ContextSnapshot {
+                            tokens_used: current_tokens,
+                            max_tokens: app_config.context_size,
+                            files: Vec::new(),
+                            model_name: app_config.model_name.clone(),
+                            exec_mode: exec_mode.clone(),
+                            connection: tui_connection_state.clone(),
+                        });
+                        let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+                    } else if c.starts_with("/save") {
+                        let parts: Vec<&str> = c.split_whitespace().collect();
+                        let save_result = if parts.len() > 1 {
+                            session::save_named(
+                                parts[1],
+                                &app_config.model_name,
+                                &exec_mode,
+                                &ui_mode,
+                                &messages,
+                            )
+                        } else {
+                            session::save_latest(&app_config.model_name, &exec_mode, &ui_mode, &messages)
+                        };
+
+                        match save_result {
+                            Ok(path) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                    "[Session] Saved to {}",
+                                    path.display()
+                                )));
+                            }
+                            Err(err) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                    "[Session] Save failed: {}",
+                                    err
+                                )));
+                            }
+                        }
+                    } else if c.starts_with("/load") {
+                        let parts: Vec<&str> = c.split_whitespace().collect();
+                        if parts.len() < 2 {
+                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                "[Session] Usage: /load <name>".to_string(),
+                            ));
+                            continue;
+                        }
+
+                        match session::load_named(parts[1]) {
+                            Ok(saved) => {
+                                messages = saved.messages;
+                                sync_system_prompt_message(&mut messages, &system_prompt);
+                                let current_tokens = tokens::count_message_tokens(&messages);
+                                let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
+                                    current_tokens,
+                                    app_config.context_size,
+                                ));
+                                let _ = event_tx.send(tui::TuiEvent::ClearHistory);
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                    "[Session] Loaded session '{}'",
+                                    parts[1]
+                                )));
+                            }
+                            Err(err) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                    "[Session] Load failed: {}",
+                                    err
+                                )));
+                            }
+                        }
+                    } else if c == "/resume" {
+                        match session::load_latest() {
+                            Ok(saved) => {
+                                messages = saved.messages;
+                                sync_system_prompt_message(&mut messages, &system_prompt);
+                                let current_tokens = tokens::count_message_tokens(&messages);
+                                let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
+                                    current_tokens,
+                                    app_config.context_size,
+                                ));
+                                let _ = event_tx.send(tui::TuiEvent::ClearHistory);
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(
+                                    "[Session] Resumed latest autosave.".to_string(),
+                                ));
+                            }
+                            Err(err) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                                    "[Session] Resume failed: {}",
+                                    err
+                                )));
+                            }
+                        }
                     } else if c.starts_with("/mode") {
                         let parts: Vec<&str> = c.split_whitespace().collect();
 
@@ -902,12 +1086,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let current_tokens = tokens::count_message_tokens(&messages);
                         let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
                             current_tokens,
-                            app_config.context_size as usize,
+                            app_config.context_size,
                         ));
+                        let _ = event_tx.send(tui::TuiEvent::ContextSnapshot {
+                            tokens_used: current_tokens,
+                            max_tokens: app_config.context_size,
+                            files: Vec::new(),
+                            model_name: app_config.model_name.clone(),
+                            exec_mode: exec_mode.clone(),
+                            connection: tui_connection_state.clone(),
+                        });
                         let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
                             "[Mode] Switched to {} mode.",
                             exec_mode
                         )));
+                        let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
                     } else {
                         let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
                             "[Unknown command] {}",
@@ -1029,27 +1222,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "temperature": 0.1
                 });
 
-                if let Ok(res) = client.post(&url).json(&compaction_body).send().await {
-                    if let Ok(text) = res.text().await {
-                        if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&text) {
-                            if let Some(summary) = &parsed.choices[0].message.content {
-                                println!("[Memory Alert] Compaction complete. History condensed.");
-                                let mut new_messages = vec![messages[0].clone()];
-                                new_messages.push(ChatMessage {
-                                    role: "assistant".to_string(),
-                                    content: Some(format!(
-                                        "[Internal Working Memory Summary]\n{}",
-                                        summary
-                                    )),
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    name: None,
-                                });
-                                new_messages.extend_from_slice(&messages[mid_point..]);
-                                messages = new_messages;
-                            }
-                        }
-                    }
+                if let Ok(res) = client.post(&url).json(&compaction_body).send().await
+                    && let Ok(text) = res.text().await
+                    && let Ok(parsed) = serde_json::from_str::<ChatResponse>(&text)
+                    && let Some(summary) = &parsed.choices[0].message.content
+                {
+                    println!("[Memory Alert] Compaction complete. History condensed.");
+                    let mut new_messages = vec![messages[0].clone()];
+                    new_messages.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: Some(format!("[Internal Working Memory Summary]\n{}", summary)),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    });
+                    new_messages.extend_from_slice(&messages[mid_point..]);
+                    messages = new_messages;
                 }
             }
 
@@ -1105,138 +1293,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match chunk_res {
                     Ok(bytes) => {
                         for event in sse_parser.push_bytes(&bytes) {
-                            if let stream::SseEvent::Data(data) = event {
-                                if let Ok(json) = serde_json::from_str::<Value>(&data) {
-                                    if let Some(choices) =
-                                        json.get("choices").and_then(|c| c.as_array())
-                                    {
-                                        if let Some(choice) = choices.first() {
-                                            if let Some((content, _)) =
-                                                extract_visible_stream_choice_text(
-                                                    choice,
-                                                    is_chat_mode,
-                                                )
-                                            {
-                                                if !is_chat_mode {
-                                                    print!("{}", content);
-                                                    std::io::stdout().flush().unwrap();
-                                                }
-                                                full_content.push_str(&content);
-                                            }
-                                            if let Some(tcs) = extract_stream_tool_calls(choice) {
-                                                for tc in tcs {
-                                                    if let Some(index) =
-                                                        tc.get("index").and_then(|i| i.as_u64())
-                                                    {
-                                                        let idx = index as usize;
-                                                        let entry = tool_calls_map.entry(idx).or_insert(json!({
-                                                            "id": "",
-                                                            "type": "function",
-                                                            "function": { "name": "", "arguments": "" }
-                                                        }));
-                                                        if let Some(id) =
-                                                            tc.get("id").and_then(|id| id.as_str())
-                                                        {
-                                                            entry["id"] = json!(id);
-                                                        }
-                                                        if let Some(func) = tc.get("function") {
-                                                            if let Some(name) = func
-                                                                .get("name")
-                                                                .and_then(|n| n.as_str())
-                                                            {
-                                                                let current =
-                                                                    entry["function"]["name"]
-                                                                        .as_str()
-                                                                        .unwrap_or("");
-                                                                entry["function"]["name"] = json!(
-                                                                    format!("{}{}", current, name)
-                                                                );
-                                                            }
-                                                            if let Some(args) = func
-                                                                .get("arguments")
-                                                                .and_then(|a| a.as_str())
-                                                            {
-                                                                let current =
-                                                                    entry["function"]["arguments"]
-                                                                        .as_str()
-                                                                        .unwrap_or("");
-                                                                entry["function"]["arguments"] = json!(
-                                                                    format!("{}{}", current, args)
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        had_stream_error = true;
-                        if should_retry_non_stream_after_stream_error(
-                            &full_content,
-                            tool_calls_map.len(),
-                        ) {
-                            println!("\n[Rust] Stream error: {}", e);
-                            let mut fallback_body = request_body.clone();
-                            fallback_body["stream"] = json!(false);
-                            if let Ok(fallback_res) =
-                                client.post(&url).json(&fallback_body).send().await
+                            if let stream::SseEvent::Data(data) = event
+                                && let Ok(json) = serde_json::from_str::<Value>(&data)
+                                && let Some(choices) =
+                                    json.get("choices").and_then(|c| c.as_array())
+                                && let Some(choice) = choices.first()
                             {
-                                if let Ok(fallback_text) = fallback_res.text().await {
-                                    let mut parsed_any = false;
-                                    if let Ok(parsed) =
-                                        serde_json::from_str::<Value>(&fallback_text)
-                                    {
-                                        if let Some(choice) = parsed
-                                            .get("choices")
-                                            .and_then(|v| v.as_array())
-                                            .and_then(|arr| arr.first())
-                                        {
-                                            if let Some(content) = choice
-                                                .get("message")
-                                                .and_then(|m| m.get("content"))
-                                                .and_then(|c| c.as_str())
-                                            {
-                                                full_content.push_str(content);
-                                                parsed_any = true;
-                                            } else if let Some(content) =
-                                                choice.get("text").and_then(|c| c.as_str())
-                                            {
-                                                full_content.push_str(content);
-                                                parsed_any = true;
-                                            }
-                                            if let Some(tcs) = choice
-                                                .get("message")
-                                                .and_then(|m| m.get("tool_calls"))
-                                                .and_then(|tc| tc.as_array())
-                                            {
-                                                for (idx, tc) in tcs.iter().enumerate() {
-                                                    tool_calls_map.insert(idx, tc.clone());
-                                                }
-                                                parsed_any = true;
-                                            }
-                                        }
-                                    }
-                                    if !parsed_any && !fallback_text.trim().is_empty() {
-                                        full_content.push_str(&fallback_text);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-
-            for event in sse_parser.finish() {
-                if let stream::SseEvent::Data(data) = event {
-                    if let Ok(json) = serde_json::from_str::<Value>(&data) {
-                        if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
-                            if let Some(choice) = choices.first() {
                                 if let Some((content, _)) =
                                     extract_visible_stream_choice_text(choice, is_chat_mode)
                                 {
@@ -1289,6 +1351,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    Err(e) => {
+                        had_stream_error = true;
+                        if should_retry_non_stream_after_stream_error(
+                            &full_content,
+                            tool_calls_map.len(),
+                        ) {
+                            println!("\n[Rust] Stream error: {}", e);
+                            let mut fallback_body = request_body.clone();
+                            fallback_body["stream"] = json!(false);
+                            if let Ok(fallback_res) =
+                                client.post(&url).json(&fallback_body).send().await
+                                && let Ok(fallback_text) = fallback_res.text().await
+                            {
+                                let mut parsed_any = false;
+                                if let Ok(parsed) = serde_json::from_str::<Value>(&fallback_text)
+                                    && let Some(choice) = parsed
+                                        .get("choices")
+                                        .and_then(|v| v.as_array())
+                                        .and_then(|arr| arr.first())
+                                {
+                                    if let Some(content) = choice
+                                        .get("message")
+                                        .and_then(|m| m.get("content"))
+                                        .and_then(|c| c.as_str())
+                                    {
+                                        full_content.push_str(content);
+                                        parsed_any = true;
+                                    } else if let Some(content) =
+                                        choice.get("text").and_then(|c| c.as_str())
+                                    {
+                                        full_content.push_str(content);
+                                        parsed_any = true;
+                                    }
+                                    if let Some(tcs) = choice
+                                        .get("message")
+                                        .and_then(|m| m.get("tool_calls"))
+                                        .and_then(|tc| tc.as_array())
+                                    {
+                                        for (idx, tc) in tcs.iter().enumerate() {
+                                            tool_calls_map.insert(idx, tc.clone());
+                                        }
+                                        parsed_any = true;
+                                    }
+                                }
+                                if !parsed_any && !fallback_text.trim().is_empty() {
+                                    full_content.push_str(&fallback_text);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            for event in sse_parser.finish() {
+                if let stream::SseEvent::Data(data) = event
+                    && let Ok(json) = serde_json::from_str::<Value>(&data)
+                    && let Some(choices) = json.get("choices").and_then(|c| c.as_array())
+                    && let Some(choice) = choices.first()
+                {
+                    if let Some((content, _)) =
+                        extract_visible_stream_choice_text(choice, is_chat_mode)
+                    {
+                        if !is_chat_mode {
+                            print!("{}", content);
+                            std::io::stdout().flush().unwrap();
+                        }
+                        full_content.push_str(&content);
+                    }
+                    if let Some(tcs) = extract_stream_tool_calls(choice) {
+                        for tc in tcs {
+                            if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                let idx = index as usize;
+                                let entry = tool_calls_map.entry(idx).or_insert(json!({
+                                    "id": "",
+                                    "type": "function",
+                                    "function": { "name": "", "arguments": "" }
+                                }));
+                                if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
+                                    entry["id"] = json!(id);
+                                }
+                                if let Some(func) = tc.get("function") {
+                                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                        let current =
+                                            entry["function"]["name"].as_str().unwrap_or("");
+                                        entry["function"]["name"] =
+                                            json!(format!("{}{}", current, name));
+                                    }
+                                    if let Some(args) =
+                                        func.get("arguments").and_then(|a| a.as_str())
+                                    {
+                                        let current =
+                                            entry["function"]["arguments"].as_str().unwrap_or("");
+                                        entry["function"]["arguments"] =
+                                            json!(format!("{}{}", current, args));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             println!();
@@ -1319,11 +1481,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(visible)
             };
 
-            if full_content.is_empty() {
-                if let Some(fallback_msg) = &message_content {
-                    print!("{}", fallback_msg);
-                    std::io::stdout().flush().unwrap();
-                }
+            if full_content.is_empty()
+                && let Some(fallback_msg) = &message_content
+            {
+                print!("{}", fallback_msg);
+                std::io::stdout().flush().unwrap();
             }
             let message_tool_calls: Option<Vec<Value>> = if final_tool_calls.is_empty() {
                 None
@@ -1366,10 +1528,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let tc = tc.clone();
                         let dangerous = app_config.dangerous_commands.clone();
                         let require_confirm = app_config.require_confirmation;
+                        let policy_context = PolicyContext {
+                            permission_tier: app_config.permission_tier,
+                            exec_mode: app_config.exec_mode.clone(),
+                            workspace_root: tools::get_allowed_dir(),
+                        };
                         async move {
                             (
                                 idx,
-                                execute_tool_async(tc, &dangerous, require_confirm).await,
+                                execute_tool_async(tc, &dangerous, require_confirm, policy_context)
+                                    .await,
                             )
                         }
                     })
@@ -1435,6 +1603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 // TUI LLM Loop: Streams tokens to the TUI with 30ms batched flushing
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+#[allow(clippy::too_many_arguments)]
 async fn run_llm_loop_tui(
     client: &Client,
     url: &str,
@@ -1465,7 +1634,7 @@ async fn run_llm_loop_tui(
         let current_tokens = tokens::count_message_tokens(messages);
         let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
             current_tokens,
-            app_config.context_size as usize,
+            app_config.context_size,
         ));
 
         // Context compaction check
@@ -1494,26 +1663,21 @@ async fn run_llm_loop_tui(
                 "temperature": 0.1
             });
 
-            if let Ok(res) = client.post(url).json(&compaction_body).send().await {
-                if let Ok(text) = res.text().await {
-                    if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&text) {
-                        if let Some(summary) = &parsed.choices[0].message.content {
-                            let mut new_messages = vec![messages[0].clone()];
-                            new_messages.push(ChatMessage {
-                                role: "assistant".to_string(),
-                                content: Some(format!(
-                                    "[Internal Working Memory Summary]\n{}",
-                                    summary
-                                )),
-                                tool_calls: None,
-                                tool_call_id: None,
-                                name: None,
-                            });
-                            new_messages.extend_from_slice(&messages[mid_point..]);
-                            *messages = new_messages;
-                        }
-                    }
-                }
+            if let Ok(res) = client.post(url).json(&compaction_body).send().await
+                && let Ok(text) = res.text().await
+                && let Ok(parsed) = serde_json::from_str::<ChatResponse>(&text)
+                && let Some(summary) = &parsed.choices[0].message.content
+            {
+                let mut new_messages = vec![messages[0].clone()];
+                new_messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: Some(format!("[Internal Working Memory Summary]\n{}", summary)),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                });
+                new_messages.extend_from_slice(&messages[mid_point..]);
+                *messages = new_messages;
             }
         }
 
@@ -1557,13 +1721,13 @@ async fn run_llm_loop_tui(
                     "[Hint] {}",
                     read_gpu_layer_hint()
                 )));
-                if fails >= 2 {
-                    if let Some(oom_excerpt) = latest_oom_excerpt() {
-                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                            "[Diagnostics] Recent model-server OOM evidence:\n{}",
-                            oom_excerpt
-                        )));
-                    }
+                if fails >= 2
+                    && let Some(oom_excerpt) = latest_oom_excerpt()
+                {
+                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
+                        "[Diagnostics] Recent model-server OOM evidence:\n{}",
+                        oom_excerpt
+                    )));
                 }
                 break;
             }
@@ -1605,10 +1769,10 @@ async fn run_llm_loop_tui(
                     match chunk_opt {
                         Some(Ok(bytes)) => {
                             for event in sse_parser.push_bytes(&bytes) {
-                                if let stream::SseEvent::Data(data) = event {
-                                    if let Ok(json) = serde_json::from_str::<Value>(&data) {
-                                        if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
-                                            if let Some(choice) = choices.first() {
+                                if let stream::SseEvent::Data(data) = event
+                                    && let Ok(json) = serde_json::from_str::<Value>(&data)
+                                        && let Some(choices) = json.get("choices").and_then(|c| c.as_array())
+                                            && let Some(choice) = choices.first() {
                                                 if let Some((content, is_reasoning)) =
                                                     extract_visible_stream_choice_text(choice, is_chat_mode)
                                                 {
@@ -1658,9 +1822,6 @@ async fn run_llm_loop_tui(
                                                     }
                                                 }
                                             }
-                                        }
-                                    }
-                                }
                             }
                         }
                         Some(Err(e)) => {
@@ -1677,11 +1838,11 @@ async fn run_llm_loop_tui(
                                 ));
                                 let mut fallback_body = request_body.clone();
                                 fallback_body["stream"] = json!(false);
-                                if let Ok(fallback_res) = client.post(url).json(&fallback_body).send().await {
-                                    if let Ok(fallback_text) = fallback_res.text().await {
+                                if let Ok(fallback_res) = client.post(url).json(&fallback_body).send().await
+                                    && let Ok(fallback_text) = fallback_res.text().await {
                                         let mut parsed_any = false;
-                                        if let Ok(parsed) = serde_json::from_str::<Value>(&fallback_text) {
-                                            if let Some(choice) = parsed
+                                        if let Ok(parsed) = serde_json::from_str::<Value>(&fallback_text)
+                                            && let Some(choice) = parsed
                                                 .get("choices")
                                                 .and_then(|v| v.as_array())
                                                 .and_then(|arr| arr.first())
@@ -1711,21 +1872,19 @@ async fn run_llm_loop_tui(
                                                     parsed_any = true;
                                                 }
                                             }
-                                        }
                                         if !parsed_any && !fallback_text.trim().is_empty() {
                                             full_content.push_str(&fallback_text);
                                         }
                                     }
-                                }
                             }
                             break;
                         }
                         None => {
                             for event in sse_parser.finish() {
-                                if let stream::SseEvent::Data(data) = event {
-                                    if let Ok(json) = serde_json::from_str::<Value>(&data) {
-                                        if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
-                                            if let Some(choice) = choices.first() {
+                                if let stream::SseEvent::Data(data) = event
+                                    && let Ok(json) = serde_json::from_str::<Value>(&data)
+                                        && let Some(choices) = json.get("choices").and_then(|c| c.as_array())
+                                            && let Some(choice) = choices.first() {
                                                 if let Some((content, is_reasoning)) =
                                                     extract_visible_stream_choice_text(choice, is_chat_mode)
                                                 {
@@ -1775,9 +1934,6 @@ async fn run_llm_loop_tui(
                                                     }
                                                 }
                                             }
-                                        }
-                                    }
-                                }
                             }
 
                             // Stream ended — flush any remaining buffer
@@ -1891,10 +2047,16 @@ async fn run_llm_loop_tui(
                     let tc = tc.clone();
                     let dangerous = app_config.dangerous_commands.clone();
                     let require_confirm = app_config.require_confirmation;
+                    let policy_context = PolicyContext {
+                        permission_tier: app_config.permission_tier,
+                        exec_mode: app_config.exec_mode.clone(),
+                        workspace_root: tools::get_allowed_dir(),
+                    };
                     async move {
                         (
                             idx,
-                            execute_tool_async(tc, &dangerous, require_confirm).await,
+                            execute_tool_async(tc, &dangerous, require_confirm, policy_context)
+                                .await,
                         )
                     }
                 })
@@ -1971,6 +2133,8 @@ mod tests {
             exec_mode: "chat".to_string(),
             chat_system_prompt: "chat-prompt".to_string(),
             agentic_system_prompt: "agentic-prompt".to_string(),
+            tool_permission_tier: "workspace_write".to_string(),
+            permission_tier: crate::security::policy::PermissionTier::WorkspaceWrite,
         }
     }
 

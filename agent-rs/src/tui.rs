@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{block::Title, Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap, block::Title},
 };
 use std::io;
 use std::time::{Duration, Instant};
@@ -26,7 +26,7 @@ use tui_input::backend::crossterm::EventHandler;
 // ── Slash commands for autocomplete ──────────────────────────────────────────
 
 const SLASH_COMMANDS: &[&str] = &[
-    "/help", "/quit", "/exit", "/clear", "/save", "/load", "/history", "/model", "/mode",
+    "/help", "/quit", "/exit", "/clear", "/save", "/load", "/resume", "/history", "/model", "/mode",
 ];
 
 // ── Application state ────────────────────────────────────────────────────────
@@ -224,10 +224,10 @@ impl TuiApp {
     fn get_formatted_cwd() -> String {
         if let Ok(path) = std::env::current_dir() {
             let mut path_str = path.to_string_lossy().to_string();
-            if let Ok(home) = std::env::var("HOME") {
-                if path_str.starts_with(&home) {
-                    path_str = path_str.replacen(&home, "~", 1);
-                }
+            if let Ok(home) = std::env::var("HOME")
+                && path_str.starts_with(&home)
+            {
+                path_str = path_str.replacen(&home, "~", 1);
             }
             path_str
         } else {
@@ -450,28 +450,28 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD)
     };
-    let dim_style = if app.no_color {
-        Style::default().add_modifier(Modifier::DIM)
+    let body_style = if app.no_color {
+        Style::default()
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
 
     lines.push(Line::from(Span::styled("📊 Session", header_style)));
     if !app.model_name.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("  model: {}", app.model_name),
-            dim_style,
+            body_style,
         )));
     }
     if !app.exec_mode_label.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("  mode: {}", app.exec_mode_label),
-            dim_style,
+            body_style,
         )));
     }
     lines.push(Line::from(Span::styled(
         format!("  {}", app.connection_label),
-        dim_style,
+        body_style,
     )));
     lines.push(Line::from(""));
 
@@ -487,16 +487,16 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
     lines.push(Line::from(Span::styled(
         format!("  [{}/{}]", app.current_tokens, app.max_tokens),
-        dim_style,
+        body_style,
     )));
-    lines.push(Line::from(Span::styled(format!("  {}", bar), dim_style)));
+    lines.push(Line::from(Span::styled(format!("  {}", bar), body_style)));
     lines.push(Line::from(""));
 
     // Section: Keyboard Shortcuts
     lines.push(Line::from(Span::styled("⌨ Keys", header_style)));
-    lines.push(Line::from(Span::styled("  Ctrl+B sidebar", dim_style)));
-    lines.push(Line::from(Span::styled("  Ctrl+T thoughts", dim_style)));
-    lines.push(Line::from(Span::styled("  Alt+⏎  submit", dim_style)));
+    lines.push(Line::from(Span::styled("  Ctrl+B sidebar", body_style)));
+    lines.push(Line::from(Span::styled("  Ctrl+T thoughts", body_style)));
+    lines.push(Line::from(Span::styled("  Alt+⏎  submit", body_style)));
 
     let sidebar = Paragraph::new(Text::from(lines))
         .block(
@@ -523,49 +523,36 @@ fn draw_help_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
         } else {
             Color::Cyan
         }));
-
-    let mut lines = vec![];
-    lines.push(Line::from(Span::styled(
-        "Keyboard Shortcuts:",
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(
-        "  Enter         : New line (in input) or submit (in preview)",
-    ));
-    lines.push(Line::from(
-        "  Alt+Enter     : Submit immediately / Run slash command",
-    ));
-    lines.push(Line::from(
-        "  Ctrl+C        : Interrupt generation, or quit if idle",
-    ));
-    lines.push(Line::from("  Ctrl+D        : Quit"));
-    lines.push(Line::from(
-        "  Ctrl+T        : Toggle internal <think> block visibility",
-    ));
-    lines.push(Line::from("  Tab           : Accept ghost autocomplete"));
-    lines.push(Line::from(
-        "  Up/Down       : Scroll chat (if input empty), else history",
-    ));
-    lines.push(Line::from("  PageUp/Down   : Scroll chat history"));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Slash Commands:",
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from("  /help         : Show this help screen"));
-    lines.push(Line::from(
-        "  /clear        : Wipe chat & context history entirely",
-    ));
-    lines.push(Line::from("  /mode status  : Show current execution mode"));
-    lines.push(Line::from(
-        "  /mode <name>  : Switch mode (`chat` or `agentic`)",
-    ));
-    lines.push(Line::from("  /quit, /exit  : Exit application"));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Press any key to dismiss.",
-        Style::default().add_modifier(Modifier::DIM),
-    )));
+    let lines = vec![
+        Line::from(Span::styled(
+            "Keyboard Shortcuts:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  Enter         : New line (in input) or submit (in preview)"),
+        Line::from("  Alt+Enter     : Submit immediately / Run slash command"),
+        Line::from("  Ctrl+C        : Interrupt generation, or quit if idle"),
+        Line::from("  Ctrl+D        : Quit"),
+        Line::from("  Ctrl+T        : Toggle internal <think> block visibility"),
+        Line::from("  Tab           : Accept ghost autocomplete"),
+        Line::from("  Up/Down       : Scroll chat (if input empty), else history"),
+        Line::from("  PageUp/Down   : Scroll chat history"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Slash Commands:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  /help         : Show this help screen"),
+        Line::from("  /clear        : Wipe chat & context history entirely"),
+        Line::from("  /resume       : Restore latest autosaved session"),
+        Line::from("  /mode status  : Show current execution mode"),
+        Line::from("  /mode <name>  : Switch mode (`chat` or `agentic`)"),
+        Line::from("  /quit, /exit  : Exit application"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press any key to dismiss.",
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+    ];
 
     let paragraph = Paragraph::new(Text::from(lines))
         .block(block)
@@ -801,29 +788,25 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             Style::default().fg(Color::DarkGray)
         };
         lines.push(Line::from(Span::styled("  ▍generating...", indicator)));
-    } else if app.is_generating {
-        if let Some(heartbeat) = &app.streaming_heartbeat {
-            let style = if app.no_color {
-                Style::default().add_modifier(Modifier::DIM)
-            } else {
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM)
-            };
-            lines.push(Line::from(Span::styled(
-                format!("◆ Helix: {}", heartbeat),
-                style,
-            )));
-        }
+    } else if app.is_generating
+        && let Some(heartbeat) = &app.streaming_heartbeat
+    {
+        let style = if app.no_color {
+            Style::default().add_modifier(Modifier::DIM)
+        } else {
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("◆ Helix: {}", heartbeat),
+            style,
+        )));
     }
 
     let total_lines = lines.len() as u16;
     let visible = area.height.saturating_sub(2);
-    let scroll = if total_lines > visible {
-        total_lines - visible
-    } else {
-        0
-    };
+    let scroll = total_lines.saturating_sub(visible);
     app.max_scroll_offset = scroll;
     if app.scroll_offset > app.max_scroll_offset {
         app.scroll_offset = app.max_scroll_offset;
@@ -873,7 +856,11 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
         ));
     }
 
-    let ratio = if app.max_tokens > 0 { (app.current_tokens as f64) / (app.max_tokens as f64) } else { 0.0 };
+    let ratio = if app.max_tokens > 0 {
+        (app.current_tokens as f64) / (app.max_tokens as f64)
+    } else {
+        0.0
+    };
     let filled = (ratio * 10.0).round() as usize;
     let empty = 10usize.saturating_sub(filled);
     let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
@@ -882,7 +869,10 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let input_widget = Paragraph::new(Line::from(spans)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(Title::from(" Input (Enter=nl, Alt+Enter=sub, Ctrl+E=editor) ").alignment(Alignment::Left))
+            .title(
+                Title::from(" Input (Enter=nl, Alt+Enter=sub, Ctrl+E=editor) ")
+                    .alignment(Alignment::Left),
+            )
             .title(Title::from(hud).alignment(Alignment::Right)),
     );
 
@@ -907,10 +897,7 @@ fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         String::new()
     };
-    let left = format!(
-        " {}{}{} ",
-        model_part, mode_part, app.status_text
-    );
+    let left = format!(" {}{}{} ", model_part, mode_part, app.status_text);
 
     // Build right segment: [current/max tok] | connection
     let right = format!(
@@ -990,7 +977,9 @@ fn truncate_preview_preserving_utf8(input: &str, max_chars: usize) -> String {
 /// - `layout_mode`: the initial layout mode (Wide or Compact).
 /// - `action_rx`: orchestrator reads user actions (Submit / Quit) from this.
 /// - `event_tx`: orchestrator sends streaming events (Token, ToolCall, etc.) to this.
-pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
+pub async fn run_tui(
+    layout_mode: api::TuiLayoutMode,
+) -> io::Result<(
     mpsc::UnboundedReceiver<TuiAction>,
     mpsc::UnboundedSender<TuiEvent>,
 )> {
@@ -1019,8 +1008,8 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                 _ = tokio::task::spawn_blocking(|| {
                     event::poll(std::time::Duration::from_millis(50)).unwrap_or(false)
                 }) => {
-                    if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
-                        if let Ok(ev) = event::read() {
+                    if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false)
+                        && let Ok(ev) = event::read() {
                             match ev {
                                 Event::Key(key) => {
                                     match handle_key_event(&mut app, key, &action_tx) {
@@ -1032,11 +1021,11 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
 
                                             // Determine editor
                                             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-                                            
+
                                             // Write current input to tmp file
                                             let tmp_dir = std::env::temp_dir();
                                             let file_path = tmp_dir.join(format!("helix_input_{}.md", std::process::id()));
-                                            
+
                                             let current_text = if app.multiline_buffer.is_empty() {
                                                 app.input.value().to_string()
                                             } else {
@@ -1044,7 +1033,7 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                                                 lines.push(app.input.value().to_string());
                                                 lines.join("\n")
                                             };
-                                            
+
                                             if let Ok(mut file) = File::create(&file_path) {
                                                 let _ = file.write_all(current_text.as_bytes());
                                             }
@@ -1052,7 +1041,7 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                                             // Cleanup terminal
                                             let _ = disable_raw_mode();
                                             let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-                                            
+
                                             // Run editor
                                             let _ = Command::new(editor).arg(&file_path).status();
 
@@ -1088,7 +1077,6 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                                 _ => {}
                             }
                         }
-                    }
                 }
 
                 // Orchestrator events
@@ -1149,14 +1137,13 @@ pub async fn run_tui(layout_mode: api::TuiLayoutMode) -> io::Result<(
                             }
                         }
                         TuiEvent::GenerationStarted => {
-                            if let Some(start) = app.ttft_start {
-                                if app.ttft_locked.is_none() {
+                            if let Some(start) = app.ttft_start
+                                && app.ttft_locked.is_none() {
                                     let duration = start.elapsed();
                                     app.ttft_locked = Some(duration);
                                     let secs = duration.as_secs_f32();
                                     app.status_text = format!("Generating... [TTFT: {:.2}s]", secs);
                                 }
-                            }
                         }
                         TuiEvent::StreamingHeartbeat(text) => {
                             app.is_generating = true;
@@ -1408,7 +1395,7 @@ fn handle_key_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{TuiApp, api, handle_key_event, truncate_preview_preserving_utf8, LoopAction};
+    use super::{LoopAction, TuiApp, api, handle_key_event, truncate_preview_preserving_utf8};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tokio::sync::mpsc;
     use tui_input::Input;

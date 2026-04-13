@@ -202,10 +202,10 @@ Plans:
 **Requirements**: SETUP-02, SESSION-01, SESSION-02
 **Depends on:** Phase 19
 **Gap Closure:** Closes vulnerabilities 2.2 and 2.4 and aligns with market expectations for professional UX.
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 22-01-PLAN.md — Onboarding profile, crash-safe autosave/resume, and slash lifecycle commands.
+- [x] 22-01-PLAN.md — Onboarding profile, crash-safe autosave/resume, and slash lifecycle commands. (completed 2026-04-13)
 
 ### Phase 23: CPU TTFT and Runtime Watchdog
 **Goal:** Improve perceived and sustained performance on modest hardware using CPU-aware runtime tuning and server health watchdog recovery.
