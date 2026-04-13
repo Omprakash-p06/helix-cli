@@ -207,25 +207,19 @@ Plans:
 Plans:
 - [x] 22-01-PLAN.md — Onboarding profile, crash-safe autosave/resume, and slash lifecycle commands. (completed 2026-04-13)
 
-### Phase 23: CPU TTFT and Runtime Watchdog
+### [x] Phase 23: CPU TTFT and Runtime Watchdog
 **Goal:** Improve perceived and sustained performance on modest hardware using CPU-aware runtime tuning and server health watchdog recovery.
-**Requirements**: PERF-04, PERF-05
-**Depends on:** Phase 21
-**Gap Closure:** Closes vulnerabilities 3.1 and 3.2 with measurable runtime reliability improvements.
-**Plans:** 0/1 plans complete
+*   **Requirements**: PERF-04, PERF-05
+*   **Success Metrics:**
+    1. Runtime applies deterministic CPU-aware profile settings that prioritize TTFT on modest hardware.
+    2. Health failures trigger bounded, stateful recovery with cooldown lockout and clear diagnostics.
 
-Plans:
-- [ ] 23-01-PLAN.md — Runtime profile contracts, watchdog recovery policy, and cross-layer verification.
-
-### Phase 24: Enterprise Audit Log MVP
+### [x] Phase 24: Enterprise Audit Log MVP
 **Goal:** Add structured, queryable audit logging for tool invocations and security decisions to support enterprise trust requirements.
-**Requirements**: ENT-01
-**Depends on:** Phase 20
-**Gap Closure:** Closes vulnerability 4.1 (auditability baseline) and supports compliance-ready evolution.
-**Plans:** 0/1 plans complete
-
-Plans:
-- [ ] 24-01-PLAN.md — Canonical audit store, policy/execution emission hooks, and queryable review surface.
+*   **Requirements**: ENT-01
+*   **Success Metrics:**
+    1. Every policy decision and tool outcome is persisted in a tamper-evident hash-chained SQLite store.
+    2. Audit logs are queryable via CLI across terminal and web paths with schema parity.
 
 ### Phase 25: Plugin SDK and IDE Bridge Foundation
 **Goal:** Establish extensibility and IDE adoption foundations through a plugin SDK contract and local IDE integration bridge.
@@ -243,7 +237,8 @@ Plans:
 **Requirements**: UX-01, STREAM-01, TOOL-01, CODE-01
 **Depends on:** Phase 19, Phase 22
 **Gap Closure:** Bridges the gap between prototype TUI and professional-grade live streaming and non-blocking tools.
-**Plans:** 0/0 plans complete
+**Plans:** 0/2 plans complete
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 26 to break down)
+- [ ] 26-01-PLAN.md - Byte-level streaming and rich TUI timeline refinement.
+- [ ] 26-02-PLAN.md - Shared async tool runtime contracts and cross-surface consolidation.
