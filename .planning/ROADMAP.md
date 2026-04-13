@@ -222,10 +222,10 @@ Plans:
 **Requirements**: ENT-01
 **Depends on:** Phase 20
 **Gap Closure:** Closes vulnerability 4.1 (auditability baseline) and supports compliance-ready evolution.
-**Plans:** 0/0 plans complete
+**Plans:** 0/1 plans complete
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 24 to break down)
+- [ ] 24-01-PLAN.md — Canonical audit store, policy/execution emission hooks, and queryable review surface.
 
 ### Phase 25: Plugin SDK and IDE Bridge Foundation
 **Goal:** Establish extensibility and IDE adoption foundations through a plugin SDK contract and local IDE integration bridge.
@@ -236,3 +236,14 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 25 to break down)
+
+### Phase 26: Open-Source Integration & Refinement
+
+**Goal:** Accelerate development by integrating patterns from high-quality open-source references for streaming, parallel tool execution, and rich TUI widgets.
+**Requirements**: UX-01, STREAM-01, TOOL-01, CODE-01
+**Depends on:** Phase 19, Phase 22
+**Gap Closure:** Bridges the gap between prototype TUI and professional-grade live streaming and non-blocking tools.
+**Plans:** 0/0 plans complete
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 26 to break down)
