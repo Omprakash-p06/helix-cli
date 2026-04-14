@@ -95,7 +95,7 @@ def ensure_windows_admin_and_relaunch_if_needed():
 
 def install_python_dependencies():
     print("Checking Python dependencies...")
-    packages = ["requests", "tqdm", "openai"]
+    packages = ["requests", "tqdm", "openai", "huggingface_hub"]
     try:
         import requests  # noqa: F401
         import tqdm  # noqa: F401
@@ -1144,11 +1144,19 @@ def main():
     os.makedirs(models_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
 
+    from model_install import install_model_spec, resolve_model_ref
+
     models_to_download = choose_models(auto_config["recommended_model"])
     for model in models_to_download:
-        url = build_model_url(model)
-        path = os.path.join(models_dir, model["filename"])
-        download_file(url, path)
+        # Check if we have trusted metadata for this model
+        trusted = resolve_model_ref(model["repo"])
+        if trusted and trusted["filename"] == model["filename"]:
+             # Use the trusted spec which contains hashes and pins
+             model.update(trusted)
+        
+        if not install_model_spec(model):
+            print(f"[!] Failed to install model: {model['name']}")
+            sys.exit(1)
 
     if len(models_to_download) > 1:
         print("\nChoose default runtime model:")

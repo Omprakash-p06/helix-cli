@@ -94,6 +94,13 @@ def main():
     print("  Universal HuggingFace Model Downloader")
     print("=" * 55)
     
+    # Ensure scripts directory is in path for imports
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+        
+    from model_install import install_model_spec, resolve_model_ref
+
     # Simple check for CLI args to simulate --help
     if len(sys.argv) > 1 and sys.argv[1] in ["-h", "--help"]:
         print("\n  Usage: python download_model.py")
@@ -117,12 +124,19 @@ def main():
             pass
             
     selected_file = gguf_files[choice - 1]["path"]
-    download_url = f"https://huggingface.co/{repo_id}/resolve/main/{selected_file}"
-    dest_path = os.path.join(PROJECT_DIR, "models", selected_file)
     
-    os.makedirs(os.path.join(PROJECT_DIR, "models"), exist_ok=True)
+    # Resolve against trusted registry if it exists
+    model_spec = {
+        "name": f"{repo_id.split('/')[-1]}::{selected_file}",
+        "repo": repo_id,
+        "filename": selected_file,
+    }
     
-    if download_file(download_url, dest_path):
+    trusted = resolve_model_ref(repo_id)
+    if trusted and trusted["filename"] == selected_file:
+         model_spec.update(trusted)
+         
+    if install_model_spec(model_spec):
         mutate_config(selected_file)
         
     print("\n" + "=" * 55)

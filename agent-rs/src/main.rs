@@ -1,160 +1,23 @@
-mod config;
-mod input;
-mod session;
-mod security;
-mod server;
-mod stream;
-mod tokens;
-mod tools;
-mod tui;
-pub mod types;
-mod utils;
-
-use crate::security::policy::{PolicyContext, PolicyDecision, evaluate_tool_call};
+use agent_rs::{
+    config, input, session, security, server, stream, tokens, tools, tui,
+    utils, runtime_profile, watchdog, audit,
+    ChatMessage, ChatResponse, ServerFlavor, critic_message, expose_think_blocks,
+};
+use agent_rs::agent_core::tool_runtime::{ToolRuntime, ToolRequest, ToolLifecycle};
+use crate::security::policy::PolicyContext;
+use std::sync::Arc;
 use futures_util::future::join_all;
 use reqwest::Client;
 use rustyline::error::ReadlineError;
-use schemars::schema_for;
 use serde_json::{Value, json};
 use std::thread;
 use std::time::Duration;
-use tokio::task::spawn_blocking;
-use tokio::time::timeout;
-use tools::ToolCallArgs;
-
-pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};
-
 static TUI_HTTP_CONNECT_FAILS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-static MODEL_SERVER_BOOT_ATTEMPTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Async tool execution wrappers (TOOL-01, TOOL-05)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// Async wrapper for executing a single tool with timeout.
-/// Runs the sync tool on the blocking thread pool via spawn_blocking.
-/// Enforces 30s timeout per TOOL-05.
-async fn execute_tool_async(
-    tc: Value,
-    dangerous_commands: &[String],
-    require_confirmation: bool,
-    policy_context: PolicyContext,
-) -> (String, tools::ToolResult, String) {
-    let id = tc["id"].as_str().unwrap_or("").to_string();
-    let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-
-    let dangerous_owned = dangerous_commands.to_vec();
-    let tool_result = match timeout(
-        Duration::from_secs(30),
-        spawn_blocking(move || {
-            execute_tool_sync(&tc, &dangerous_owned, require_confirmation, &policy_context)
-        }),
-    )
-    .await
-    {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => tools::ToolResult {
-            success: false,
-            output: format!("Tool '{}' execution failed: {}", func_name, e),
-        },
-        Err(_) => tools::ToolResult {
-            success: false,
-            output: format!("Tool '{}' timed out after 30 seconds", func_name),
-        },
-    };
-
-    (id, tool_result, func_name)
-}
-
-/// Synchronous core that runs on the blocking thread pool.
-/// Dispatches to the appropriate tool execution function.
-fn execute_tool_sync(
-    tc: &Value,
-    dangerous_commands: &[String],
-    require_confirmation: bool,
-    policy_context: &PolicyContext,
-) -> tools::ToolResult {
-    let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-    let args_value = &tc["function"]["arguments"];
-    let parsed_args = if let Some(raw_str) = args_value.as_str() {
-        serde_json::from_str::<Value>(raw_str).unwrap_or(json!({}))
-    } else if args_value.is_object() {
-        args_value.clone()
-    } else {
-        json!({})
-    };
-
-    let simulated_payload = json!({
-        "name": func_name,
-        "arguments": parsed_args
-    });
-
-    match evaluate_tool_call(
-        tc["function"]["name"].as_str().unwrap_or(""),
-        &parsed_args,
-        policy_context,
-    ) {
-        PolicyDecision::Allow => {}
-        PolicyDecision::RequireApproval {
-            reason_code,
-            message,
-        } => {
-            return tools::ToolResult {
-                success: false,
-                output: format!("[Approval Required: {}] {}", reason_code, message),
-            };
-        }
-        PolicyDecision::Deny {
-            reason_code,
-            message,
-            remediation,
-        } => {
-            return tools::ToolResult {
-                success: false,
-                output: format!(
-                    "[Policy Denied: {}] {} Remediation: {}",
-                    reason_code, message, remediation
-                ),
-            };
-        }
-    }
-
-    match serde_json::from_value::<tools::ToolCallArgs>(simulated_payload) {
-        Ok(ToolCallArgs::RunTerminalCommand(input)) => tools::execute_run_terminal_command(
-            input,
-            dangerous_commands,
-            require_confirmation,
-            policy_context,
-        ),
-        Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
-        Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
-        Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
-        Ok(ToolCallArgs::ListDirectory(input)) => tools::execute_list_directory(input),
-        Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-        Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
-            success: false,
-            output: "Tool 'search_codebase' is currently disabled.".to_string(),
-        },
-        Err(e) => tools::ToolResult {
-            success: false,
-            output: format!("Schema error: {}", e),
-        },
-    }
-}
-
-pub fn critic_message(text: &str) -> ChatMessage {
-    ChatMessage {
-        role: "user".to_string(),
-        content: Some(format!("[Rust Critic] {}", text)),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
-}
 
 async fn detect_server_flavor(client: &Client, base_url: &str) -> ServerFlavor {
+
     let models_url = format!("{}/models", base_url.trim_end_matches('/'));
     let res = match client.get(&models_url).send().await {
         Ok(r) => r,
@@ -197,17 +60,6 @@ fn print_helix_logo(animated: bool) {
     }
 
     println!("Py + Rust Hybrid Agent Stack");
-}
-
-/// Exposes internal `<think>` blocks by mapping them to `<thinking>` tags for the UI,
-/// ensuring the user can see the agent's internal reasoning.
-pub fn expose_think_blocks(text: &str) -> String {
-    let mut s = text.replace("<think>", "\n<thinking>\n");
-    s = s.replace("</think>", "\n</thinking>\n");
-    if s.contains("<thinking>") && !s.contains("</thinking>") {
-        s.push_str("\n</thinking>");
-    }
-    s.trim().to_string()
 }
 
 fn format_visible_output(text: &str, is_chat_mode: bool) -> String {
@@ -328,15 +180,6 @@ fn should_enable_tool_grammar(is_chat_mode: bool, server_flavor: ServerFlavor) -
     server_flavor == ServerFlavor::KoboldCpp
 }
 
-fn flush_token_buffer(
-    event_tx: &tokio::sync::mpsc::UnboundedSender<tui::TuiEvent>,
-    token_buffer: &mut String,
-) {
-    if !token_buffer.is_empty() {
-        let _ = event_tx.send(tui::TuiEvent::TokenChunk(token_buffer.clone()));
-        token_buffer.clear();
-    }
-}
 
 fn read_server_stderr_log() -> Option<String> {
     let candidates = [
@@ -496,7 +339,7 @@ fn chat_max_tokens() -> usize {
     std::env::var("HELIX_CHAT_MAX_TOKENS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(128)
+        .unwrap_or(1024)
 }
 
 async fn send_with_retry(
@@ -600,14 +443,25 @@ fn open_log_file(path: &str) -> Option<std::fs::File> {
         .ok()
 }
 
-async fn maybe_boot_model_server(client: &Client, app_config: &config::AppConfig) -> bool {
+async fn maybe_boot_model_server(
+    client: &Client, 
+    app_config: &config::AppConfig, 
+    watchdog: &mut watchdog::Watchdog,
+    profile: &runtime_profile::RuntimeProfile,
+) -> bool {
     if probe_model_chat_ready(client, app_config).await {
+        watchdog.on_success();
         return true;
     }
 
-    if MODEL_SERVER_BOOT_ATTEMPTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+    if !watchdog.can_restart() {
+        let (state, msg) = watchdog.on_failure();
+        println!("[Watchdog] {} - Status: {:?}", msg, state);
         return false;
     }
+
+    let (state, msg) = watchdog.on_failure();
+    println!("[Watchdog] {} - Status: {:?}", msg, state);
 
     let (project_dir, script_rel_path) = match resolve_server_launch_context() {
         Some(ctx) => ctx,
@@ -620,11 +474,17 @@ async fn maybe_boot_model_server(client: &Client, app_config: &config::AppConfig
     let mut cmd = std::process::Command::new("python");
     cmd.current_dir(project_dir).arg(script_rel_path);
 
-    // Recovery path prioritizes guaranteed availability over GPU speed.
-    cmd.env("HELIX_BACKEND_HINT", "cpu")
-        .env("HELIX_GPU_LAYERS", "0")
-        .env("HELIX_FALLBACK_BACKEND_HINT", "cpu")
-        .env("HELIX_FALLBACK_GPU_LAYERS", "0");
+    // Apply profile settings (PERF-04)
+    let settings = profile.settings(
+        num_cpus::get(),
+        app_config.context_size,
+    );
+
+    cmd.env("HELIX_RUNTIME_PROFILE", profile.as_str())
+        .env("HELIX_BATCH_SIZE", settings.batch_size.to_string())
+        .env("HELIX_UBATCH_SIZE", settings.ubatch_size.to_string())
+        .env("HELIX_CPU_THREADS", settings.cpu_threads.to_string())
+        .env("HELIX_CONTEXT_SIZE", settings.context_size.to_string());
 
     if let Some(stdout_file) = open_log_file(&stdout_path) {
         cmd.stdout(std::process::Stdio::from(stdout_file));
@@ -636,6 +496,12 @@ async fn maybe_boot_model_server(client: &Client, app_config: &config::AppConfig
 
     if cmd.spawn().is_err() {
         return false;
+    }
+
+    let backoff = watchdog.next_backoff();
+    if backoff > Duration::from_secs(0) {
+        println!("[Watchdog] Recovery backoff: {:?}...", backoff);
+        tokio::time::sleep(backoff).await;
     }
 
     let startup_timeout_s = std::env::var("HELIX_SERVER_STARTUP_TIMEOUT_S")
@@ -693,11 +559,16 @@ async fn send_with_recovery(
     url: &str,
     request_body: &Value,
     app_config: &config::AppConfig,
+    watchdog: &mut watchdog::Watchdog,
+    profile: &runtime_profile::RuntimeProfile,
 ) -> Result<reqwest::Response, reqwest::Error> {
     match send_with_retry(client, url, request_body, 3).await {
-        Ok(response) => Ok(response),
+        Ok(response) => {
+            watchdog.on_success();
+            Ok(response)
+        }
         Err(err) => {
-            if is_transient_http_error(&err) && maybe_boot_model_server(client, app_config).await {
+            if is_transient_http_error(&err) && maybe_boot_model_server(client, app_config, watchdog, profile).await {
                 let recovery_attempts = std::env::var("HELIX_RECOVERY_RETRY_ATTEMPTS")
                     .ok()
                     .and_then(|v| v.parse::<usize>().ok())
@@ -714,6 +585,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading configuration from python runtime...");
     let app_config = config::AppConfig::load_from_python()?;
     let client = Client::builder().user_agent("HelixAgent/0.1.0").build()?;
+
+    // CPU-first runtime profile selection (PERF-04)
+    let mut system = sysinfo::System::new_all();
+    system.refresh_cpu_usage();
+    let cpu_cores = system.cpus().len();
+    let is_cpu_only = std::env::var("HELIX_GPU_LAYERS")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .map(|v| v == 0)
+        .unwrap_or(false);
+
+    let runtime_profile = runtime_profile::select_runtime_profile(is_cpu_only, cpu_cores);
+    println!("[Runtime] Selected profile: {} ({} CPU cores detected)", 
+        runtime_profile.as_str(), cpu_cores);
+
+    let mut watchdog = watchdog::Watchdog::new(3, 300); // 3 restarts max, 5 min cooldown
+
+    let registry = Arc::new(tools::create_default_registry());
+
+    let audit_store = if app_config.audit_enabled {
+        match audit::AuditStore::new(&app_config.audit_db_path) {
+            Ok(store) => Some(Arc::new(store)),
+            Err(e) => {
+                eprintln!("[Audit Warning] Failed to initialize audit store: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     /*
     println!("\n[RAG] Booting FastEmbed Semantic Knowledge Base... (this may take a moment)");
@@ -733,7 +634,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tools_payload = if is_chat_mode {
         json!([])
     } else {
-        build_tools(&persona, strict_tools)?
+        registry.build_tools_payload(&persona, strict_tools)
     };
     if server_flavor == ServerFlavor::KoboldCpp {
         println!(
@@ -762,6 +663,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             generated_grammar,
             tools_payload,
             server_flavor,
+            audit_store,
+            registry,
         )
         .await;
         return Ok(());
@@ -771,6 +674,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sync_system_prompt_message(&mut messages, &system_prompt);
 
     let args: Vec<String> = std::env::args().collect();
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Audit Query Path (ENT-01)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if args.iter().any(|r| r == "--audit-query") {
+        if let Some(store) = audit_store {
+            let events = store.query_events(None, None, None, None, None, None)?;
+            println!("\n--- Helix Audit Log (Last 50 events) ---");
+            let start_idx = events.len().saturating_sub(50);
+            for event in &events[start_idx..] {
+                let dt = chrono::DateTime::from_timestamp(event.timestamp, 0)
+                    .unwrap_or_default();
+                println!("[{}] actor={:<5} path={:<8} type={:<10} tool={:<20} decision={:<18} outcome={:<10}", 
+                    dt.format("%Y-%m-%d %H:%M:%S"),
+                    event.actor, event.path, event.event_type, event.tool_name, 
+                    event.decision.as_deref().unwrap_or("-"),
+                    event.outcome.as_deref().unwrap_or("-")
+                );
+            }
+            println!("--- End of Log ---");
+            let chain_ok = store.verify_chain()?;
+            println!("Tamper-evidence chain status: {}", if chain_ok { "VALID [✓]" } else { "INVALID [!]" });
+        } else {
+            println!("[!] Audit logging is disabled in current configuration.");
+        }
+        return Ok(());
+    }
+
     let mut initial_prompt = args
         .iter()
         .position(|r| r == "--prompt")
@@ -865,6 +796,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 server_flavor,
                 &mut action_rx,
                 &event_tx,
+                &mut watchdog,
+                &runtime_profile,
+                audit_store.clone(),
+                registry.clone(),
             )
             .await;
             let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
@@ -896,6 +831,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         server_flavor,
                         &mut action_rx,
                         &event_tx,
+                        &mut watchdog,
+                        &runtime_profile,
+                        audit_store.clone(),
+                        registry.clone(),
                     )
                     .await;
                     let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
@@ -1056,16 +995,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tools_payload = if is_chat_mode {
                             json!([])
                         } else {
-                            match build_tools(&persona, strict_tools) {
-                                Ok(payload) => payload,
-                                Err(err) => {
-                                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                                        "[Mode] Failed to initialize tools: {}",
-                                        err
-                                    )));
-                                    continue;
-                                }
-                            }
+                            registry.build_tools_payload(&persona, strict_tools)
                         };
 
                         let grammar_enabled =
@@ -1264,7 +1194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .insert("grammar".to_string(), json!(generated_grammar));
             }
 
-            let res = match send_with_recovery(&client, &url, &request_body, &app_config).await {
+            let res = match send_with_recovery(&client, &url, &request_body, &app_config, &mut watchdog, &runtime_profile).await {
                 Ok(r) => r,
                 Err(e) => {
                     println!("[Rust] HTTP Error: {}", e);
@@ -1525,7 +1455,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .enumerate()
                     .map(|(idx, tc)| {
-                        let tc = tc.clone();
+                        let id = tc["id"].as_str().unwrap_or("").to_string();
+                        let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                        let args_value = &tc["function"]["arguments"];
+                        let parsed_args = if let Some(raw_str) = args_value.as_str() {
+                            serde_json::from_str::<Value>(raw_str).unwrap_or(json!({}))
+                        } else if args_value.is_object() {
+                            args_value.clone()
+                        } else {
+                            json!({})
+                        };
+
+                        let req = ToolRequest {
+                            call_id: id,
+                            name: func_name,
+                            arguments: parsed_args,
+                        };
+
                         let dangerous = app_config.dangerous_commands.clone();
                         let require_confirm = app_config.require_confirmation;
                         let policy_context = PolicyContext {
@@ -1533,11 +1479,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             exec_mode: app_config.exec_mode.clone(),
                             workspace_root: tools::get_allowed_dir(),
                         };
+                        let audit_store_owned = audit_store.clone();
+                        let registry_owned = registry.clone();
                         async move {
                             (
                                 idx,
-                                execute_tool_async(tc, &dangerous, require_confirm, policy_context)
-                                    .await,
+                                ToolRuntime::execute(
+                                    req,
+                                    dangerous,
+                                    require_confirm,
+                                    policy_context,
+                                    audit_store_owned,
+                                    "terminal".to_string(),
+                                    registry_owned,
+                                    None,
+                                )
+                                .await,
                             )
                         }
                     })
@@ -1615,6 +1572,10 @@ async fn run_llm_loop_tui(
     server_flavor: ServerFlavor,
     action_rx: &mut tokio::sync::mpsc::UnboundedReceiver<tui::TuiAction>,
     event_tx: &tokio::sync::mpsc::UnboundedSender<tui::TuiEvent>,
+    watchdog: &mut watchdog::Watchdog,
+    profile: &runtime_profile::RuntimeProfile,
+    audit_store: Option<Arc<audit::AuditStore>>,
+    registry: Arc<tools::ToolRegistry>,
 ) {
     let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp {
         0.05
@@ -1707,7 +1668,7 @@ async fn run_llm_loop_tui(
 
         let _ = event_tx.send(tui::TuiEvent::Status("Generating...".to_string()));
 
-        let res = match send_with_recovery(client, url, &request_body, app_config).await {
+        let res = match send_with_recovery(client, url, &request_body, app_config, watchdog, profile).await {
             Ok(r) => {
                 TUI_HTTP_CONNECT_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
                 r
@@ -1745,10 +1706,9 @@ async fn run_llm_loop_tui(
         let mut in_reasoning_block = false;
         let mut last_heartbeat = std::time::Instant::now();
 
-        // 30ms batch flushing for token streaming
-        let mut token_buffer = String::new();
-        let mut flush_interval = tokio::time::interval(Duration::from_millis(30));
-        flush_interval.tick().await; // consume the immediate first tick
+        // Heartbeat interval for TUI feedback (no longer batching tokens)
+        let mut heartbeat_interval = tokio::time::interval(Duration::from_millis(300));
+        heartbeat_interval.tick().await; // consume the immediate first tick
 
         loop {
             tokio::select! {
@@ -1756,7 +1716,6 @@ async fn run_llm_loop_tui(
                 action_opt = action_rx.recv() => {
                     match action_opt {
                         Some(tui::TuiAction::Interrupt) | Some(tui::TuiAction::Quit) => {
-                            flush_token_buffer(event_tx, &mut token_buffer);
                             let _ = event_tx.send(tui::TuiEvent::SystemMessage(
                                 "[Generation Interrupted]".to_string()
                             ));
@@ -1784,17 +1743,18 @@ async fn run_llm_loop_tui(
                                                     if is_reasoning && !in_reasoning_block {
                                                         in_reasoning_block = true;
                                                         full_content.push_str("<think>");
-                                                        token_buffer.push_str("<think>");
+                                                        let _ = event_tx.send(tui::TuiEvent::TokenChunk("<think>".to_string()));
                                                         let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Thinking...".to_string()));
                                                     } else if !is_reasoning && in_reasoning_block {
                                                         in_reasoning_block = false;
                                                         full_content.push_str("</think>\n\n");
-                                                        token_buffer.push_str("</think>\n\n");
+                                                        let _ = event_tx.send(tui::TuiEvent::TokenChunk("</think>\n\n".to_string()));
                                                         let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Generating...".to_string()));
                                                     }
 
                                                     full_content.push_str(&content);
-                                                    token_buffer.push_str(&content);
+                                                    let _ = event_tx.send(tui::TuiEvent::TokenChunk(content));
+                                                    last_heartbeat = std::time::Instant::now();
                                                 }
                                                 if let Some(tcs) = extract_stream_tool_calls(choice) {
                                                     for tc in tcs {
@@ -1853,12 +1813,14 @@ async fn run_llm_loop_tui(
                                                     .and_then(|c| c.as_str())
                                                 {
                                                     full_content.push_str(content);
+                                                    let _ = event_tx.send(tui::TuiEvent::TokenChunk(content.to_string()));
                                                     parsed_any = true;
                                                 } else if let Some(content) = choice
                                                     .get("text")
                                                     .and_then(|c| c.as_str())
                                                 {
                                                     full_content.push_str(content);
+                                                    let _ = event_tx.send(tui::TuiEvent::TokenChunk(content.to_string()));
                                                     parsed_any = true;
                                                 }
                                                 if let Some(tcs) = choice
@@ -1874,6 +1836,7 @@ async fn run_llm_loop_tui(
                                             }
                                         if !parsed_any && !fallback_text.trim().is_empty() {
                                             full_content.push_str(&fallback_text);
+                                            let _ = event_tx.send(tui::TuiEvent::TokenChunk(fallback_text));
                                         }
                                     }
                             }
@@ -1896,17 +1859,17 @@ async fn run_llm_loop_tui(
                                                     if is_reasoning && !in_reasoning_block {
                                                         in_reasoning_block = true;
                                                         full_content.push_str("<think>");
-                                                        token_buffer.push_str("<think>");
+                                                        let _ = event_tx.send(tui::TuiEvent::TokenChunk("<think>".to_string()));
                                                         let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Thinking...".to_string()));
                                                     } else if !is_reasoning && in_reasoning_block {
                                                         in_reasoning_block = false;
                                                         full_content.push_str("</think>\n\n");
-                                                        token_buffer.push_str("</think>\n\n");
+                                                        let _ = event_tx.send(tui::TuiEvent::TokenChunk("</think>\n\n".to_string()));
                                                         let _ = event_tx.send(tui::TuiEvent::StatusUpdate("Generating...".to_string()));
                                                     }
 
                                                     full_content.push_str(&content);
-                                                    token_buffer.push_str(&content);
+                                                    let _ = event_tx.send(tui::TuiEvent::TokenChunk(content));
                                                 }
                                                 if let Some(tcs) = extract_stream_tool_calls(choice) {
                                                     for tc in tcs {
@@ -1936,17 +1899,14 @@ async fn run_llm_loop_tui(
                                             }
                             }
 
-                            // Stream ended — flush any remaining buffer
-                            flush_token_buffer(event_tx, &mut token_buffer);
+                            // Stream ended
                             break;
                         }
                     }
                 }
-                _ = flush_interval.tick() => {
-                    // 30ms timer fired — flush accumulated tokens to the TUI
-                    if !token_buffer.is_empty() {
-                        flush_token_buffer(event_tx, &mut token_buffer);
-                    } else if last_heartbeat.elapsed() >= Duration::from_millis(300) {
+                _ = heartbeat_interval.tick() => {
+                    // Heartbeat timer fired — provide feedback if no tokens seen recently
+                    if last_heartbeat.elapsed() >= Duration::from_millis(300) {
                         let _ = event_tx.send(tui::TuiEvent::StreamingHeartbeat(
                             "Model is still working...".to_string()
                         ));
@@ -2021,7 +1981,75 @@ async fn run_llm_loop_tui(
                 break;
             }
 
-            // Emit ToolStart event for EACH tool before execution (TOOL-02)
+            // Execute all tools concurrently via join_all (TOOL-04)
+            // Track original index for result ordering (D-04)
+            let tasks: Vec<_> = tool_calls
+                .iter()
+                .enumerate()
+                .map(|(idx, tc)| {
+                    let id = tc["id"].as_str().unwrap_or("").to_string();
+                    let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                    let args_value = &tc["function"]["arguments"];
+                    let parsed_args = if let Some(raw_str) = args_value.as_str() {
+                        serde_json::from_str::<Value>(raw_str).unwrap_or(json!({}))
+                    } else if args_value.is_object() {
+                        args_value.clone()
+                    } else {
+                        json!({})
+                    };
+
+                    let req = ToolRequest {
+                        call_id: id,
+                        name: func_name,
+                        arguments: parsed_args,
+                    };
+
+                    let dangerous = app_config.dangerous_commands.clone();
+                    let require_confirm = app_config.require_confirmation;
+                    let policy_context = PolicyContext {
+                        permission_tier: app_config.permission_tier,
+                        exec_mode: app_config.exec_mode.clone(),
+                        workspace_root: tools::get_allowed_dir(),
+                    };
+                    let audit_store_owned = audit_store.clone();
+                    let registry_owned = registry.clone();
+                    
+                    let (_event_tx_inner, mut event_rx_inner) = tokio::sync::mpsc::unbounded_channel::<ToolLifecycle>();
+                    let _event_tx_outer = event_tx.clone();
+                    
+                    // Forward lifecycle events to TUI
+                    tokio::spawn(async move {
+                        while let Some(ev) = event_rx_inner.recv().await {
+                            match ev {
+                                ToolLifecycle::Start { name: _name, id: _ } => {
+                                    // Need arguments for ToolInfo but ToolLifecycle doesn't carry them yet.
+                                    // Actually, we can just send ToolStart here if we had arguments.
+                                    // Let's stick to the core plan of using ToolRuntime.
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+
+                    async move {
+                        (
+                            idx,
+                            ToolRuntime::execute(
+                                req,
+                                dangerous,
+                                require_confirm,
+                                policy_context,
+                                audit_store_owned,
+                                "terminal".to_string(),
+                                registry_owned,
+                                None, // We handle TUI events manually below for now to preserve arguments
+                            ).await,
+                        )
+                    }
+                })
+                .collect();
+
+            // PRE-EMIT Start events to keep TUI responsive (retaining existing behavior)
             for tc in tool_calls {
                 let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
                 let args_value = &tc["function"]["arguments"];
@@ -2037,30 +2065,6 @@ async fn run_llm_loop_tui(
                     arguments: parsed_args.to_string(),
                 }));
             }
-
-            // Execute all tools concurrently via join_all (TOOL-04)
-            // Track original index for result ordering (D-04)
-            let tasks: Vec<_> = tool_calls
-                .iter()
-                .enumerate()
-                .map(|(idx, tc)| {
-                    let tc = tc.clone();
-                    let dangerous = app_config.dangerous_commands.clone();
-                    let require_confirm = app_config.require_confirmation;
-                    let policy_context = PolicyContext {
-                        permission_tier: app_config.permission_tier,
-                        exec_mode: app_config.exec_mode.clone(),
-                        workspace_root: tools::get_allowed_dir(),
-                    };
-                    async move {
-                        (
-                            idx,
-                            execute_tool_async(tc, &dangerous, require_confirm, policy_context)
-                                .await,
-                        )
-                    }
-                })
-                .collect();
 
             let mut results = join_all(tasks).await;
 
@@ -2117,7 +2121,8 @@ async fn run_llm_loop_tui(
 mod tests {
     use super::{
         extract_stream_tool_calls, extract_visible_delta_text, extract_visible_stream_choice_text,
-        flush_token_buffer, format_visible_output, should_replay_final_content,
+        format_visible_output,
+ should_replay_final_content,
         should_retry_non_stream_after_stream_error, system_prompt_for_mode,
     };
     use serde_json::json;
@@ -2134,6 +2139,8 @@ mod tests {
             chat_system_prompt: "chat-prompt".to_string(),
             agentic_system_prompt: "agentic-prompt".to_string(),
             tool_permission_tier: "workspace_write".to_string(),
+            audit_enabled: true,
+            audit_db_path: "logs/audit.db".to_string(),
             permission_tier: crate::security::policy::PermissionTier::WorkspaceWrite,
         }
     }
@@ -2208,21 +2215,6 @@ mod tests {
         assert!(!format_visible_output(input, true).trim().is_empty());
     }
 
-    #[tokio::test]
-    async fn flush_token_buffer_emits_chunk_and_clears_buffer() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let mut token_buffer = "partial-stream".to_string();
-
-        flush_token_buffer(&tx, &mut token_buffer);
-
-        assert!(token_buffer.is_empty());
-        match rx.recv().await {
-            Some(crate::tui::TuiEvent::TokenChunk(chunk)) => {
-                assert_eq!(chunk, "partial-stream");
-            }
-            _ => panic!("expected TokenChunk event"),
-        }
-    }
 
     #[test]
     fn format_visible_output_strips_reasoning_in_chat_mode() {
@@ -2274,104 +2266,3 @@ mod tests {
     }
 }
 
-fn build_tools(persona: &str, strict_tools: bool) -> Result<Value, Box<dyn std::error::Error>> {
-    let mut tools = Vec::new();
-
-    /*
-    // search_codebase — always available
-    let search_schema = schema_for!(tools::SearchCodebaseInput);
-    let search_obj = serde_json::to_value(search_schema)?;
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "search_codebase",
-            "description": "Semantic vector search over the entire project codebase. Use this first before read_file to locate relevant code without guessing paths.",
-            "strict": true,
-            "parameters": search_obj
-        }
-    }));
-    */
-
-    // list_directory — always available
-    let list_dir_schema = schema_for!(tools::ListDirectoryInput);
-    let list_dir_obj = serde_json::to_value(list_dir_schema)?;
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "list_directory",
-            "description": "List files and subdirectories at the given path (2 levels deep). Use this to explore the project structure before reading files. Never guess paths.",
-            "strict": strict_tools,
-            "parameters": list_dir_obj
-        }
-    }));
-
-    // read_file — always available
-    let read_file_schema = schema_for!(tools::ReadFileInput);
-    let read_file_obj = serde_json::to_value(read_file_schema)?;
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read text from a local file. Output is capped at 12,000 chars. Use search_codebase first to locate the right file.",
-            "strict": strict_tools,
-            "parameters": read_file_obj
-        }
-    }));
-
-    // get_system_stats — always available
-    let get_system_stats_schema = schema_for!(tools::GetSystemStatsInput);
-    let get_system_stats_obj = serde_json::to_value(get_system_stats_schema)?;
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "get_system_stats",
-            "description": "Check real-time hardware metrics like RAM, CPU% and Uptime via native syscalls.",
-            "strict": strict_tools,
-            "parameters": get_system_stats_obj
-        }
-    }));
-
-    // write_file + append_file accessible to coder and os_assistant
-    if persona == "os_assistant" || persona == "coder" {
-        let write_file_schema = schema_for!(tools::WriteFileInput);
-        let write_file_obj = serde_json::to_value(write_file_schema)?;
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "Write (overwrite) text content to a file. A verify-back read will be automatically enforced.",
-                "strict": strict_tools,
-                "parameters": write_file_obj
-            }
-        }));
-
-        let append_file_schema = schema_for!(tools::AppendFileInput);
-        let append_file_obj = serde_json::to_value(append_file_schema)?;
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": "append_file",
-                "description": "Safely append content to the END of an existing file without overwriting. Use for adding functions, config blocks, or log lines.",
-                "strict": strict_tools,
-                "parameters": append_file_obj
-            }
-        }));
-    }
-
-    // run_terminal_command — os_assistant only
-    if persona == "os_assistant" {
-        let run_cmd_schema = schema_for!(tools::RunTerminalCommandInput);
-        let run_cmd_obj = serde_json::to_value(run_cmd_schema)?;
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": "run_terminal_command",
-                "description": "Execute an arbitrary shell command. STDOUT/STDERR are returned (capped at 8,000 chars from the end).",
-                "strict": strict_tools,
-                "parameters": run_cmd_obj
-            }
-        }));
-    }
-
-    Ok(json!(tools))
-}

@@ -25,6 +25,39 @@ mod audit {
     include!("../src/audit.rs");
 }
 
+mod agent_core {
+    pub mod tool_runtime {
+        // Mock ToolResult for the include macro in other modules
+        use serde::{Deserialize, Serialize};
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub struct ToolResult {
+            pub success: bool,
+            pub output: String,
+        }
+        
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub struct ToolRequest {
+            pub call_id: String,
+            pub name: String,
+            pub arguments: serde_json::Value,
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub enum ToolLifecycle {
+            Start { id: String, name: String },
+            Status { id: String, message: String },
+            Result { id: String, success: bool, output_summary: String },
+        }
+
+        pub struct ToolRuntime;
+        impl ToolRuntime {
+            pub async fn execute(_: ToolRequest, _: Vec<String>, _: bool, _: crate::security::policy::PolicyContext, _: Option<std::sync::Arc<crate::audit::AuditStore>>, _: String, _: std::sync::Arc<crate::tools::ToolRegistry>, _: Option<tokio::sync::mpsc::UnboundedSender<ToolLifecycle>>) -> (String, ToolResult, String) {
+                ("id".into(), ToolResult { success: true, output: "mock".into() }, "name".into())
+            }
+        }
+    }
+}
+
 mod tools {
     include!("../src/tools.rs");
 }

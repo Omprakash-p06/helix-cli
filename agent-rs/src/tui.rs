@@ -150,6 +150,7 @@ pub struct ChatEntry {
     pub content: String,
     /// Pre-parsed styled spans for rich rendering (think blocks, etc.).
     pub spans: Vec<ChatSpan>,
+    pub tool_id: Option<u64>,
 }
 
 pub struct TuiApp {
@@ -180,9 +181,12 @@ pub struct TuiApp {
     pub cwd: String,
     pub current_tokens: usize,
     pub max_tokens: usize,
-    // ── Phase 19 additions ──
+    // ── Phase 19/26 additions ──
     layout_mode: api::TuiLayoutMode,
     sidebar_visible: bool,
+    sidebar_tab: state::SidebarTab,
+    tool_timeline: Vec<state::ToolTimelineEntry>,
+    collapsed_tools: Vec<u64>,
     model_name: String,
     exec_mode_label: String,
     connection_label: String,
@@ -215,6 +219,9 @@ impl TuiApp {
             max_tokens: 8192,
             layout_mode,
             sidebar_visible: true,
+            sidebar_tab: state::SidebarTab::ContextFiles,
+            tool_timeline: Vec::new(),
+            collapsed_tools: Vec::new(),
             model_name: String::new(),
             exec_mode_label: String::new(),
             connection_label: String::from("connecting"),
@@ -283,6 +290,7 @@ impl TuiApp {
                 text: trimmed.clone(),
                 style: Style::default(),
             }],
+            tool_id: None,
         });
         // Follow the latest message after submission so new responses stay visible.
         self.scroll_offset = 0;
@@ -376,12 +384,25 @@ impl TuiApp {
                 role: "assistant".to_string(),
                 content: clean_content,
                 spans: self.streaming_spans.clone(),
+                tool_id: None,
             });
             self.streaming_content.clear();
             self.streaming_spans.clear();
             self.streaming_heartbeat = None;
             self.in_think_block = false;
         }
+    }
+
+    pub fn toggle_tool_collapsed(&mut self, id: u64) {
+        if let Some(pos) = self.collapsed_tools.iter().position(|&x| x == id) {
+            self.collapsed_tools.remove(pos);
+        } else {
+            self.collapsed_tools.push(id);
+        }
+    }
+
+    pub fn is_tool_collapsed(&self, id: u64) -> bool {
+        self.collapsed_tools.contains(&id)
     }
 }
 
@@ -442,7 +463,6 @@ fn draw(frame: &mut Frame, app: &mut TuiApp) {
 fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Section: Session Info
     let header_style = if app.no_color {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
@@ -456,46 +476,83 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
         Style::default().fg(Color::Gray)
     };
 
-    lines.push(Line::from(Span::styled("📊 Session", header_style)));
-    if !app.model_name.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  model: {}", app.model_name),
-            body_style,
-        )));
-    }
-    if !app.exec_mode_label.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  mode: {}", app.exec_mode_label),
-            body_style,
-        )));
-    }
-    lines.push(Line::from(Span::styled(
-        format!("  {}", app.connection_label),
-        body_style,
-    )));
+    // Sidebar Tabs
+    let tab_text = match app.sidebar_tab {
+        state::SidebarTab::ContextFiles => " [Files]  Timeline ",
+        state::SidebarTab::ToolTimeline => "  Files  [Timeline] ",
+    };
+    lines.push(Line::from(Span::styled(tab_text, header_style)));
     lines.push(Line::from(""));
 
-    // Section: Token Usage
-    lines.push(Line::from(Span::styled("📈 Tokens", header_style)));
-    let ratio = if app.max_tokens > 0 {
-        (app.current_tokens as f64) / (app.max_tokens as f64)
-    } else {
-        0.0
-    };
-    let filled = (ratio * 10.0).round() as usize;
-    let empty = 10usize.saturating_sub(filled);
-    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-    lines.push(Line::from(Span::styled(
-        format!("  [{}/{}]", app.current_tokens, app.max_tokens),
-        body_style,
-    )));
-    lines.push(Line::from(Span::styled(format!("  {}", bar), body_style)));
-    lines.push(Line::from(""));
+    match app.sidebar_tab {
+        state::SidebarTab::ContextFiles => {
+            // Section: Session Info
+            lines.push(Line::from(Span::styled("📊 Session", header_style)));
+            if !app.model_name.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("  model: {}", app.model_name),
+                    body_style,
+                )));
+            }
+            if !app.exec_mode_label.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("  mode: {}", app.exec_mode_label),
+                    body_style,
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  {}", app.connection_label),
+                body_style,
+            )));
+            lines.push(Line::from(""));
+
+            // Section: Token Usage
+            lines.push(Line::from(Span::styled("📈 Tokens", header_style)));
+            let ratio = if app.max_tokens > 0 {
+                (app.current_tokens as f64) / (app.max_tokens as f64)
+            } else {
+                0.0
+            };
+            let filled = (ratio * 10.0).round() as usize;
+            let empty = 10usize.saturating_sub(filled);
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+            lines.push(Line::from(Span::styled(
+                format!("  [{}/{}]", app.current_tokens, app.max_tokens),
+                body_style,
+            )));
+            lines.push(Line::from(Span::styled(format!("  {}", bar), body_style)));
+            lines.push(Line::from(""));
+        }
+        state::SidebarTab::ToolTimeline => {
+            lines.push(Line::from(Span::styled("🔧 Tool Timeline", header_style)));
+            if app.tool_timeline.is_empty() {
+                lines.push(Line::from(Span::styled("  (no tools run)", body_style)));
+            } else {
+                for entry in app.tool_timeline.iter().rev().take(15) {
+                    let (icon, color) = match entry.status {
+                        state::ToolTimelineStatus::Running => ("⚙", Color::Cyan),
+                        state::ToolTimelineStatus::Completed => ("✓", Color::Green),
+                        state::ToolTimelineStatus::Failed => ("✗", Color::Red),
+                    };
+                    let duration = entry
+                        .duration_ms
+                        .map(|d| format!(" ({}ms)", d))
+                        .unwrap_or_default();
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+                        Span::styled(entry.name.clone(), body_style),
+                        Span::styled(duration, Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+        }
+    }
 
     // Section: Keyboard Shortcuts
     lines.push(Line::from(Span::styled("⌨ Keys", header_style)));
     lines.push(Line::from(Span::styled("  Ctrl+B sidebar", body_style)));
-    lines.push(Line::from(Span::styled("  Ctrl+T thoughts", body_style)));
+    lines.push(Line::from(Span::styled("  Ctrl+L switch tab", body_style)));
     lines.push(Line::from(Span::styled("  Alt+⏎  submit", body_style)));
 
     let sidebar = Paragraph::new(Text::from(lines))
@@ -743,6 +800,21 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             }
             _ => ("  ", Style::default()),
         };
+
+        // Handle collapsed tool blocks
+        if let Some(tid) = entry.tool_id {
+            if app.is_tool_collapsed(tid) {
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled(
+                        format!("{} [collapsed]", entry.content),
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                continue;
+            }
+        }
 
         // Use spans if available (for assistant entries with think blocks)
         if !entry.spans.is_empty() && entry.role == "assistant" {
@@ -1097,6 +1169,8 @@ pub async fn run_tui(
                         TuiEvent::ToolStart(info) => {
                             app.status_text = format!("🔧 Executing {}...", info.name);
                             let content = format!("Executing `{}`...", info.name);
+                            let tool_id = app.tool_timeline.len() as u64;
+
                             app.chat_history.push(ChatEntry {
                                 role: "tool_start".to_string(),
                                 content: content.clone(),
@@ -1108,6 +1182,17 @@ pub async fn run_tui(
                                         Style::default().fg(Color::Cyan)
                                     },
                                 }],
+                                tool_id: Some(tool_id),
+                            });
+
+                            // Add to tool_timeline
+                            app.tool_timeline.push(state::ToolTimelineEntry {
+                                id: tool_id,
+                                name: info.name.clone(),
+                                args_preview: truncate_preview_preserving_utf8(&info.arguments, 50),
+                                status: state::ToolTimelineStatus::Running,
+                                duration_ms: None,
+                                started_at: std::time::SystemTime::now(),
                             });
                         }
                         TuiEvent::ToolResult(result) => {
@@ -1125,7 +1210,24 @@ pub async fn run_tui(
                                         Style::default().fg(Color::Yellow)
                                     },
                                 }],
+                                tool_id: None,
                             });
+
+                            // Update tool_timeline
+                            if let Some(entry) = app.tool_timeline.iter_mut().rev().find(|e| {
+                                e.name == result.name && e.status == state::ToolTimelineStatus::Running
+                            }) {
+                                entry.status = if result.success {
+                                    state::ToolTimelineStatus::Completed
+                                } else {
+                                    state::ToolTimelineStatus::Failed
+                                };
+                                entry.duration_ms = entry
+                                    .started_at
+                                    .elapsed()
+                                    .ok()
+                                    .map(|d| d.as_millis() as u64);
+                            }
                         }
                         TuiEvent::Status(text) => {
                             app.status_text = text;
@@ -1155,6 +1257,7 @@ pub async fn run_tui(
                         }
                         TuiEvent::ClearHistory => {
                             app.chat_history.clear();
+                            app.tool_timeline.clear();
                             app.scroll_offset = 0;
                             app.max_scroll_offset = 0;
                         }
@@ -1170,6 +1273,7 @@ pub async fn run_tui(
                                         Style::default().fg(Color::DarkGray)
                                     },
                                 }],
+                                tool_id: None,
                             });
                         }
                         TuiEvent::ThemeChanged(_theme) => {
@@ -1275,6 +1379,15 @@ fn handle_key_event(
                         "Sidebar: visible".to_string()
                     } else {
                         "Sidebar: hidden".to_string()
+                    };
+                }
+
+                // Ctrl+L = switch sidebar tab
+                KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.sidebar_tab = app.sidebar_tab.toggle();
+                    app.status_text = match app.sidebar_tab {
+                        state::SidebarTab::ContextFiles => "Sidebar: Context Files".to_string(),
+                        state::SidebarTab::ToolTimeline => "Sidebar: Tool Timeline".to_string(),
                     };
                 }
 

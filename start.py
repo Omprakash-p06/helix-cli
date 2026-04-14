@@ -167,18 +167,25 @@ server_proc = subprocess.Popen(
 def wait_for_server():
     timeout_s = int(os.environ.get("HELIX_SERVER_STARTUP_TIMEOUT_S", "180"))
     for _ in range(max(1, timeout_s)):
+        # Fail fast if bootstrap process has already died.
+        if server_proc.poll() is not None:
+            return False, "exited"
         try:
-            res = requests.get("http://127.0.0.1:8080/v1/models")
+            res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
             if res.status_code == 200:
-                return True
+                return True, "ready"
         except Exception:
             pass
         time.sleep(1)
-    return False
+    return False, "timeout"
 
 
-if not wait_for_server():
-    print("  [!] LLM Server failed to start or timed out.")
+ready, startup_state = wait_for_server()
+if not ready:
+    if startup_state == "exited":
+        print("  [!] LLM Server bootstrap exited before readiness check completed.")
+    else:
+        print("  [!] LLM Server failed to start or timed out.")
     if server_proc.poll() is not None:
         print(f"  [!] start_server.py exited early with code {server_proc.returncode}.")
     print(f"  [i] Startup logs: {server_out_log}")
@@ -198,6 +205,14 @@ if not wait_for_server():
         print("  [i] Recent stderr:")
         for line in err_tail.splitlines():
             print(f"      {line}")
+
+        lowered = err_tail.lower()
+        if "couldn't bind http server socket" in lowered or "address already in use" in lowered:
+            print("  [Diagnosis] Port 8080 is already occupied, so llama-server cannot bind.")
+            print("  [Fix] Stop the process using 127.0.0.1:8080 or change SERVER_PORT in scripts/config.py.")
+        if "pyinstaller's embedded pkg archive" in lowered:
+            print("  [Diagnosis] KoboldCPP fallback binary is invalid or corrupted.")
+            print("  [Fix] Re-download koboldcpp-linux-x64 via setup.py or provide a valid fallback binary.")
     elif out_tail:
         print("  [i] Recent stdout:")
         for line in out_tail.splitlines():

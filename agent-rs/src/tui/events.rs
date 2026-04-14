@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
+use super::TuiAction;
 use super::commands::filter_commands;
 use super::state::TuiState;
-use super::TuiAction;
 
 /// Handle keyboard input when the command palette is open.
 pub fn handle_command_palette_input(key: KeyEvent, state: &mut TuiState) -> Option<TuiAction> {

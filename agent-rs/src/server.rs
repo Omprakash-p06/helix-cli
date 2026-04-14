@@ -14,9 +14,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 
 use crate::config::AppConfig;
+use crate::security::policy::PolicyContext;
 use crate::tokens;
-use crate::tools::{self, ToolCallArgs};
+use crate::tools::{self, ToolRegistry};
 use crate::types::{ChatMessage, ChatResponse, ServerFlavor};
+use crate::audit::AuditStore;
+use crate::agent_core::tool_runtime::{ToolRuntime, ToolRequest, ToolLifecycle};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,6 +29,8 @@ pub struct AppState {
     pub generated_grammar: String,
     pub tools_payload: Value,
     pub server_flavor: ServerFlavor,
+    pub audit_store: Option<Arc<AuditStore>>,
+    pub tool_registry: Arc<ToolRegistry>,
 }
 
 #[derive(Deserialize)]
@@ -38,12 +44,28 @@ pub struct AgentEventPayload {
     pub content: String,
 }
 
+#[derive(Serialize)]
+pub struct StatusResponse {
+    pub status: String,
+    pub version: String,
+    pub model: String,
+    pub server_flavor: String,
+}
+
+#[derive(Serialize)]
+pub struct ContextResponse {
+    pub workspace_root: String,
+    pub git_branch: String,
+}
+
 pub async fn start_web_server(
     app_config: AppConfig,
     _persona: String,
     generated_grammar: String,
     tools_payload: Value,
     server_flavor: ServerFlavor,
+    audit_store: Option<Arc<AuditStore>>,
+    tool_registry: Arc<ToolRegistry>,
 ) {
     let client = Client::builder()
         .no_gzip()
@@ -57,11 +79,16 @@ pub async fn start_web_server(
         generated_grammar,
         tools_payload,
         server_flavor,
+        audit_store,
+        tool_registry,
     };
 
     let app = Router::new()
         .route("/chat", post(chat_handler))
         .route("/health", get(|| async { "OK" }))
+        .route("/v1/status", get(status_handler))
+        .route("/v1/tools", get(tools_handler))
+        .route("/v1/context", get(context_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -75,6 +102,37 @@ pub async fn start_web_server(
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
+    Json(StatusResponse {
+        status: "ok".into(),
+        version: "0.1.0".into(),
+        model: state.app_config.model_name.clone(),
+        server_flavor: format!("{:?}", state.server_flavor),
+    })
+}
+
+async fn tools_handler(State(state): State<AppState>) -> Json<Value> {
+    Json(state.tool_registry.build_tools_payload(
+        &std::env::var("AGENT_PERSONA").unwrap_or_else(|_| "os_assistant".to_string()),
+        state.server_flavor != ServerFlavor::KoboldCpp,
+    ))
+}
+
+async fn context_handler() -> Json<ContextResponse> {
+    let workspace_root = tools::get_allowed_dir().to_string_lossy().to_string();
+    let git_branch = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&workspace_root)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+
+    Json(ContextResponse {
+        workspace_root,
+        git_branch,
+    })
 }
 
 async fn chat_handler(
@@ -141,26 +199,21 @@ async fn chat_handler(
                     "temperature": 0.1
                 });
 
-                if let Ok(res) = state.client.post(&url).json(&compaction_body).send().await {
-                    if let Ok(text) = res.text().await {
-                        if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&text) {
-                            if let Some(summary) = &parsed.choices[0].message.content {
-                                let mut new_messages = vec![messages[0].clone()];
-                                new_messages.push(ChatMessage {
-                                    role: "assistant".to_string(),
-                                    content: Some(format!(
-                                        "[Internal Working Memory Summary]\n{}",
-                                        summary
-                                    )),
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    name: None,
-                                });
-                                new_messages.extend_from_slice(&messages[mid_point..]);
-                                messages = new_messages;
-                            }
-                        }
-                    }
+                if let Ok(res) = state.client.post(&url).json(&compaction_body).send().await
+                    && let Ok(text) = res.text().await
+                    && let Ok(parsed) = serde_json::from_str::<ChatResponse>(&text)
+                    && let Some(summary) = &parsed.choices[0].message.content
+                {
+                    let mut new_messages = vec![messages[0].clone()];
+                    new_messages.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: Some(format!("[Internal Working Memory Summary]\n{}", summary)),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    });
+                    new_messages.extend_from_slice(&messages[mid_point..]);
+                    messages = new_messages;
                 }
             }
 
@@ -194,7 +247,7 @@ async fn chat_handler(
                 }
             };
 
-            let response_text = match res.text().await {
+            let response_text: String = match res.text().await {
                 Ok(t) => t,
                 Err(e) => {
                     let _ = tx
@@ -286,62 +339,52 @@ async fn chat_handler(
                         json!({})
                     };
 
-                    let _ = tx
-                        .send(Ok(Event::default()
-                            .json_data(AgentEventPayload {
-                                r#type: "tool_start".to_string(),
-                                content: format!("Executing {}...", func_name),
-                            })
-                            .unwrap()))
-                        .await;
+                    let req = ToolRequest {
+                        call_id: id.clone(),
+                        name: func_name.clone(),
+                        arguments: parsed_args,
+                    };
 
-                    let simulated_payload = json!({
-                        "name": func_name,
-                        "arguments": parsed_args
+                    let (event_tx_inner, mut event_rx_inner) = mpsc::unbounded_channel::<ToolLifecycle>();
+                    let tx_outer = tx.clone();
+                    
+                    // Spawn a task to forward lifecycle events
+                    tokio::spawn(async move {
+                        while let Some(ev) = event_rx_inner.recv().await {
+                            let payload = match ev {
+                                ToolLifecycle::Start { name, .. } => AgentEventPayload {
+                                    r#type: "tool_start".to_string(),
+                                    content: format!("Executing {}...", name),
+                                },
+                                ToolLifecycle::Status { message, .. } => AgentEventPayload {
+                                    r#type: "tool_status".to_string(),
+                                    content: message,
+                                },
+                                ToolLifecycle::Result { success, .. } => AgentEventPayload {
+                                    r#type: "tool_result".to_string(),
+                                    content: format!("Result: {}", if success { "Success" } else { "Failed" }),
+                                },
+                            };
+                            let _ = tx_outer.send(Ok(Event::default().json_data(payload).unwrap())).await;
+                        }
                     });
 
-                    let tool_result = match serde_json::from_value::<ToolCallArgs>(
-                        simulated_payload,
-                    ) {
-                        Ok(ToolCallArgs::RunTerminalCommand(input)) => {
-                            tools::execute_run_terminal_command(
-                                input,
-                                &state.app_config.dangerous_commands,
-                                state.app_config.require_confirmation,
-                            )
-                        }
-                        Ok(ToolCallArgs::ReadFile(input)) => tools::execute_read_file(input),
-                        Ok(ToolCallArgs::WriteFile(input)) => tools::execute_write_file(input),
-                        Ok(ToolCallArgs::AppendFile(input)) => tools::execute_append_file(input),
-                        Ok(ToolCallArgs::ListDirectory(input)) => {
-                            tools::execute_list_directory(input)
-                        }
-                        Ok(ToolCallArgs::GetSystemStats(_)) => tools::execute_get_system_stats(),
-                        Ok(ToolCallArgs::SearchCodebase(_)) => tools::ToolResult {
-                            success: false,
-                            output: "Tool 'search_codebase' is currently disabled.".to_string(),
-                        },
-                        Err(e) => {
-                            let correction = format!(
-                                "You sent invalid arguments to the '{}' tool. Schema error: {}. \
-                                Carefully re-read the tool's required parameters and call it again with the correct argument names and types.",
-                                func_name, e
-                            );
-                            critic_injections.push(crate::critic_message(&correction));
-                            temperature_override = if state.server_flavor == ServerFlavor::KoboldCpp
-                            {
-                                0.2
-                            } else {
-                                0.3
-                            };
-                            tools::ToolResult {
-                                success: false,
-                                output: format!(
-                                    "[Schema mismatch — see correction directive above]"
-                                ),
-                            }
-                        }
+                    let policy_context = PolicyContext {
+                        permission_tier: state.app_config.permission_tier,
+                        exec_mode: state.app_config.exec_mode.clone(),
+                        workspace_root: tools::get_allowed_dir(),
                     };
+
+                    let (_, tool_result, _) = ToolRuntime::execute(
+                        req,
+                        state.app_config.dangerous_commands.clone(),
+                        state.app_config.require_confirmation,
+                        policy_context,
+                        state.audit_store.clone(),
+                        "web".to_string(),
+                        state.tool_registry.clone(),
+                        Some(event_tx_inner),
+                    ).await;
 
                     if !tool_result.success && func_name == "run_terminal_command" {
                         critic_injections.push(crate::critic_message(
@@ -359,22 +402,6 @@ async fn chat_handler(
                             "File was written. You MUST now verify it is correct: use the read_file tool to read back the file you just wrote before continuing to the next step."
                         ));
                     }
-
-                    let _ = tx
-                        .send(Ok(Event::default()
-                            .json_data(AgentEventPayload {
-                                r#type: "tool_result".to_string(),
-                                content: format!(
-                                    "Result: {}",
-                                    if tool_result.success {
-                                        "Success"
-                                    } else {
-                                        "Failed"
-                                    }
-                                ),
-                            })
-                            .unwrap()))
-                        .await;
 
                     messages.push(ChatMessage {
                         role: "tool".to_string(),

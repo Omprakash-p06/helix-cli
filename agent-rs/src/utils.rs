@@ -210,11 +210,7 @@ pub fn deduplicate_consecutive_sentences(text: &str) -> String {
 }
 
 pub fn normalize_quotes(text: &str) -> String {
-    let mut out = text
-        .replace('“', "\"")
-        .replace('”', "\"")
-        .replace('‘', "'")
-        .replace('’', "'");
+    let mut out = text.replace(['“', '”'], "\"").replace(['‘', '’'], "'");
 
     let double_quotes = out.chars().filter(|c| *c == '"').count();
     if double_quotes % 2 == 1 {

@@ -3,6 +3,14 @@ name = "agent-rs"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "agent_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "helix-agent"
+path = "src/main.rs"
+
 [dependencies]
 async-openai = "0.33.1"
 reqwest = { version = "0.12.9", features = ["json", "stream"] }
@@ -25,3 +33,11 @@ ratatui = "0.26"
 crossterm = "0.27"
 tui-input = "0.8"
 unicode-width = "0.1"
+
+regex = "1"
+shell-words = "1"
+num_cpus = "1.17.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+sha2 = "0.11.0"
+hex = "0.4.3"
+chrono = "0.4.44"

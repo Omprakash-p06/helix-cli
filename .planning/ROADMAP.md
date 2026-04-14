@@ -221,24 +221,19 @@ Plans:
     1. Every policy decision and tool outcome is persisted in a tamper-evident hash-chained SQLite store.
     2. Audit logs are queryable via CLI across terminal and web paths with schema parity.
 
-### Phase 25: Plugin SDK and IDE Bridge Foundation
+### [x] Phase 25: Plugin SDK and IDE Bridge Foundation
 **Goal:** Establish extensibility and IDE adoption foundations through a plugin SDK contract and local IDE integration bridge.
-**Requirements**: ENT-02, IDE-01
-**Depends on:** Phase 22
-**Gap Closure:** Closes vulnerabilities 4.2 and 4.3 and aligns with competitive market expectations.
-**Plans:** 0/0 plans complete
-
-Plans:
-- [ ] TBD (run /gsd-plan-phase 25 to break down)
-
-### Phase 26: Open-Source Integration & Refinement
-
+*   **Requirements**: ENT-02, IDE-01
+*   **Success Metrics:**
+    1. Hardcoded match blocks removed in favor of a dynamic `ToolRegistry` system.
+    2. IDE-compatible status, tool discovery, and context endpoints active in web mode.
+### [x] Phase 26: Open-Source Integration & Refinement
 **Goal:** Accelerate development by integrating patterns from high-quality open-source references for streaming, parallel tool execution, and rich TUI widgets.
-**Requirements**: UX-01, STREAM-01, TOOL-01, CODE-01
-**Depends on:** Phase 19, Phase 22
-**Gap Closure:** Bridges the gap between prototype TUI and professional-grade live streaming and non-blocking tools.
-**Plans:** 0/2 plans complete
+*   **Requirements**: UX-01, STREAM-01, TOOL-01, CODE-01
+*   **Success Metrics:**
+    1. Byte-level immediate token rendering in TUI (no buffering).
+    2. Tool timeline widget with stable status and collapsible output.
+    3. Unified tool runtime architecture shared across all execution paths.
 
-Plans:
-- [ ] 26-01-PLAN.md - Byte-level streaming and rich TUI timeline refinement.
-- [ ] 26-02-PLAN.md - Shared async tool runtime contracts and cross-surface consolidation.
+- [x] 26-01-PLAN.md - Byte-level streaming and rich TUI timeline refinement.
+- [x] 26-02-PLAN.md - Shared async tool runtime contracts and cross-surface consolidation.

@@ -25,7 +25,11 @@ except ImportError:
 
 
 def apply_runtime_overrides():
-    """Allow parent launchers to override backend/layer settings via env vars."""
+    """Allow parent launchers to override backend/layer/batch/context settings via env vars."""
+    profile = os.environ.get("HELIX_RUNTIME_PROFILE", "").strip().lower()
+    if profile:
+        print(f"  [Runtime] Applying profile: {profile}")
+
     backend = os.environ.get("HELIX_BACKEND_HINT", "").strip().lower()
     if backend:
         config.BACKEND_HINT = backend
@@ -34,6 +38,34 @@ def apply_runtime_overrides():
     if gpu_layers:
         try:
             config.GPU_LAYERS = int(gpu_layers)
+        except ValueError:
+            pass
+
+    batch = os.environ.get("HELIX_BATCH_SIZE", "").strip()
+    if batch:
+        try:
+            config.BATCH_SIZE = int(batch)
+        except ValueError:
+            pass
+
+    ubatch = os.environ.get("HELIX_UBATCH_SIZE", "").strip()
+    if ubatch:
+        try:
+            config.UBATCH_SIZE = int(ubatch)
+        except ValueError:
+            pass
+
+    threads = os.environ.get("HELIX_CPU_THREADS", "").strip()
+    if threads:
+        try:
+            config.CPU_THREADS = int(threads)
+        except ValueError:
+            pass
+
+    context = os.environ.get("HELIX_CONTEXT_SIZE", "").strip()
+    if context:
+        try:
+            config.CONTEXT_SIZE = int(context)
         except ValueError:
             pass
 
@@ -174,9 +206,18 @@ def run_koboldcpp(model_path):
     print(f"  Command: {' '.join(cmd)}")
     try:
         process = subprocess.Popen(cmd)
+        time.sleep(2)
+        if process.poll() is not None:
+            print(f"  KoboldCPP exited immediately with code {process.returncode}.")
+            return False
+
         print("  KoboldCPP started. Press Ctrl+C to stop.")
         process.wait()
-        return True
+        if process.returncode == 0:
+            return True
+
+        print(f"  KoboldCPP exited with code {process.returncode}.")
+        return False
     except Exception as e:
         print(f"  Error: {e}")
         return False

@@ -1,10 +1,15 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use sysinfo::System;
+
+use crate::security::policy::PolicyContext;
+pub use crate::agent_core::tool_runtime::ToolResult;
 
 // ==========================================
 // TOOL SCHEMAS & TYPES
@@ -55,34 +60,178 @@ pub struct SearchCodebaseInput {
     pub query: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "name", content = "arguments", rename_all = "snake_case")]
-pub enum ToolCallArgs {
-    #[serde(rename = "run_terminal_command")]
-    RunTerminalCommand(RunTerminalCommandInput),
-    #[serde(rename = "read_file")]
-    ReadFile(ReadFileInput),
-    #[serde(rename = "write_file")]
-    WriteFile(WriteFileInput),
-    #[serde(rename = "append_file")]
-    AppendFile(AppendFileInput),
-    #[serde(rename = "list_directory")]
-    ListDirectory(ListDirectoryInput),
-    #[serde(rename = "get_system_stats")]
-    GetSystemStats(GetSystemStatsInput),
-    #[serde(rename = "search_codebase")]
-    SearchCodebase(SearchCodebaseInput),
+// ==========================================
+
+pub trait Tool: Send + Sync {
+    fn name(&self) -> String;
+    fn description(&self) -> String;
+    fn schema(&self) -> Value;
+    fn execute(
+        &self,
+        args: Value,
+        dangerous_commands: &[String],
+        require_confirmation: bool,
+        policy_context: &PolicyContext,
+    ) -> ToolResult;
 }
 
-/// Structured tool result with deterministic success signal.
-/// The Rust critic uses `success` to decide whether to inject retry/verify directives.
-pub struct ToolResult {
-    pub success: bool,
-    pub output: String,
+#[derive(Default)]
+pub struct ToolRegistry {
+    tools: HashMap<String, Box<dyn Tool>>,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            tools: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, tool: Box<dyn Tool>) {
+        self.tools.insert(tool.name(), tool);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&dyn Tool> {
+        self.tools.get(name).map(|b| b.as_ref())
+    }
+
+    pub fn list_tools(&self) -> Vec<&dyn Tool> {
+        self.tools.values().map(|b| b.as_ref()).collect()
+    }
+
+    pub fn build_tools_payload(&self, persona: &str, strict_tools: bool) -> Value {
+        let mut tools = Vec::new();
+        for tool in self.list_tools() {
+            // Replicate persona filtering logic
+            let name = tool.name();
+            if (name == "write_file" || name == "append_file") && !(persona == "os_assistant" || persona == "coder") {
+                continue;
+            }
+            if name == "run_terminal_command" && persona != "os_assistant" {
+                continue;
+            }
+            if name == "search_codebase" {
+                // Keep it disabled for now as in current build_tools
+                continue;
+            }
+
+            tools.push(json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": tool.description(),
+                    "strict": if strict_tools { Some(true) } else { None },
+                    "parameters": tool.schema(),
+                }
+            }));
+        }
+        json!(tools)
+    }
+}
+
+pub fn create_default_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register(Box::new(RunTerminalCommandTool));
+    registry.register(Box::new(ReadFileTool));
+    registry.register(Box::new(WriteFileTool));
+    registry.register(Box::new(AppendFileTool));
+    registry.register(Box::new(ListDirectoryTool));
+    registry.register(Box::new(GetSystemStatsTool));
+    registry.register(Box::new(SearchCodebaseTool));
+    registry
 }
 
 // ==========================================
-// TOOL EXECUTION LOGIC
+// BUILT-IN TOOL IMPLEMENTATIONS
+// ==========================================
+
+struct RunTerminalCommandTool;
+impl Tool for RunTerminalCommandTool {
+    fn name(&self) -> String { "run_terminal_command".into() }
+    fn description(&self) -> String { "Executes a shell command on the local system.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(RunTerminalCommandInput).into() }
+    fn execute(&self, args: Value, dangerous_commands: &[String], require_confirmation: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<RunTerminalCommandInput>(args) {
+            Ok(input) => execute_run_terminal_command(input, dangerous_commands, require_confirmation, _ctx),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct ReadFileTool;
+impl Tool for ReadFileTool {
+    fn name(&self) -> String { "read_file".into() }
+    fn description(&self) -> String { "Reads the content of a file at the specified absolute path.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(ReadFileInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<ReadFileInput>(args) {
+            Ok(input) => execute_read_file(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct WriteFileTool;
+impl Tool for WriteFileTool {
+    fn name(&self) -> String { "write_file".into() }
+    fn description(&self) -> String { "Writes content to a file at the specified absolute path.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(WriteFileInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<WriteFileInput>(args) {
+            Ok(input) => execute_write_file(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct AppendFileTool;
+impl Tool for AppendFileTool {
+    fn name(&self) -> String { "append_file".into() }
+    fn description(&self) -> String { "Appends content to a file at the specified absolute path.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(AppendFileInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<AppendFileInput>(args) {
+            Ok(input) => execute_append_file(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct ListDirectoryTool;
+impl Tool for ListDirectoryTool {
+    fn name(&self) -> String { "list_directory".into() }
+    fn description(&self) -> String { "Lists the contents of a directory.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(ListDirectoryInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<ListDirectoryInput>(args) {
+            Ok(input) => execute_list_directory(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct GetSystemStatsTool;
+impl Tool for GetSystemStatsTool {
+    fn name(&self) -> String { "get_system_stats".into() }
+    fn description(&self) -> String { "Returns local system resource usage (CPU, RAM).".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(GetSystemStatsInput).into() }
+    fn execute(&self, _args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        execute_get_system_stats()
+    }
+}
+
+struct SearchCodebaseTool;
+impl Tool for SearchCodebaseTool {
+    fn name(&self) -> String { "search_codebase".into() }
+    fn description(&self) -> String { "Performs keyword search across the codebase.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(SearchCodebaseInput).into() }
+    fn execute(&self, _args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        ToolResult { success: false, output: "Tool 'search_codebase' is currently disabled.".into() }
+    }
+}
+
+// ==========================================
+// CORE EXECUTION WRAPPERS
 // ==========================================
 
 pub fn get_allowed_dir() -> PathBuf {
@@ -123,8 +272,6 @@ fn enforce_sandbox(target_path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
-/// Tail-truncate a string to `max_chars`, keeping the LAST bytes since
-/// that's where the meaningful error output appears.
 fn tail_truncate(s: &str, max_chars: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= max_chars {
@@ -138,10 +285,11 @@ fn tail_truncate(s: &str, max_chars: usize) -> String {
     )
 }
 
-pub fn execute_run_terminal_command(
+fn execute_run_terminal_command(
     input: RunTerminalCommandInput,
     dangerous_commands: &[String],
     require_confirmation: bool,
+    _policy_context: &PolicyContext,
 ) -> ToolResult {
     let cmd = input.command;
     let is_dangerous = dangerous_commands
@@ -192,7 +340,6 @@ pub fn execute_run_terminal_command(
                 raw = "Command executed successfully with no output.".to_string();
             }
 
-            // Cap output — always tail so last error lines are preserved
             let result = tail_truncate(&raw, CMD_OUTPUT_MAX_CHARS);
             ToolResult {
                 success,
@@ -206,7 +353,7 @@ pub fn execute_run_terminal_command(
     }
 }
 
-pub fn execute_read_file(input: ReadFileInput) -> ToolResult {
+fn execute_read_file(input: ReadFileInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
         Err(e) => {
@@ -246,7 +393,7 @@ pub fn execute_read_file(input: ReadFileInput) -> ToolResult {
     }
 }
 
-pub fn execute_write_file(input: WriteFileInput) -> ToolResult {
+fn execute_write_file(input: WriteFileInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
         Err(e) => {
@@ -258,13 +405,13 @@ pub fn execute_write_file(input: WriteFileInput) -> ToolResult {
     };
 
     println!("Writing: {}", resolved_path.display());
-    if let Some(parent) = resolved_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            return ToolResult {
-                success: false,
-                output: format!("Failed to create parent directories: {}", e),
-            };
-        }
+    if let Some(parent) = resolved_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return ToolResult {
+            success: false,
+            output: format!("Failed to create parent directories: {}", e),
+        };
     }
 
     match fs::write(&resolved_path, input.content) {
@@ -279,7 +426,7 @@ pub fn execute_write_file(input: WriteFileInput) -> ToolResult {
     }
 }
 
-pub fn execute_append_file(input: AppendFileInput) -> ToolResult {
+fn execute_append_file(input: AppendFileInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
         Err(e) => {
@@ -291,13 +438,13 @@ pub fn execute_append_file(input: AppendFileInput) -> ToolResult {
     };
 
     println!("Appending to: {}", resolved_path.display());
-    if let Some(parent) = resolved_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            return ToolResult {
-                success: false,
-                output: format!("Failed to create parent directories: {}", e),
-            };
-        }
+    if let Some(parent) = resolved_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return ToolResult {
+            success: false,
+            output: format!("Failed to create parent directories: {}", e),
+        };
     }
 
     use std::io::Write;
@@ -323,7 +470,7 @@ pub fn execute_append_file(input: AppendFileInput) -> ToolResult {
     }
 }
 
-pub fn execute_list_directory(input: ListDirectoryInput) -> ToolResult {
+fn execute_list_directory(input: ListDirectoryInput) -> ToolResult {
     let resolved_path = match enforce_sandbox(&input.absolute_path) {
         Ok(p) => p,
         Err(e) => {
@@ -386,7 +533,7 @@ pub fn execute_list_directory(input: ListDirectoryInput) -> ToolResult {
     }
 }
 
-pub fn execute_get_system_stats() -> ToolResult {
+fn execute_get_system_stats() -> ToolResult {
     let mut sys = System::new_all();
     sys.refresh_all();
     let total_memory = sys.total_memory() / 1024 / 1024;

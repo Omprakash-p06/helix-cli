@@ -1,7 +1,7 @@
 use ratatui::style::Color;
 
-use super::state::ThemeName;
 use super::TuiEvent;
+use super::state::ThemeName;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ThemeColorSet {
@@ -80,29 +80,29 @@ impl ThemeColorSet {
 
     fn dark() -> Self {
         Self {
-            background: Color::Rgb(10, 14, 20),   // #0A0E14
+            background: Color::Rgb(10, 14, 20),    // #0A0E14
             foreground: Color::Rgb(212, 212, 212), // #D4D4D4
             primary: Color::Rgb(97, 175, 239),
             secondary: Color::Rgb(110, 118, 129),
-            accent: Color::Rgb(0, 255, 204),       // #00FFCC
+            accent: Color::Rgb(0, 255, 204), // #00FFCC
             border: Color::Rgb(80, 80, 80),
             border_focused: Color::Rgb(0, 255, 204),
             title: Color::Rgb(0, 255, 204),
-            subtitle: Color::Rgb(106, 111, 120),   // #6A6F78
+            subtitle: Color::Rgb(106, 111, 120), // #6A6F78
             user_message: Color::Rgb(255, 255, 255),
             assistant_message: Color::Rgb(212, 212, 212),
             system_message: Color::Rgb(106, 111, 120),
             tool_message: Color::Yellow,
-            error: Color::Rgb(255, 85, 85),        // #FF5555
-            success: Color::Rgb(85, 255, 85),      // #55FF55
-            warning: Color::Rgb(255, 165, 0),      // #FFA500
+            error: Color::Rgb(255, 85, 85),   // #FF5555
+            success: Color::Rgb(85, 255, 85), // #55FF55
+            warning: Color::Rgb(255, 165, 0), // #FFA500
             info: Color::Cyan,
             ghost_text: Color::Rgb(106, 111, 120),
             selection: Color::Rgb(60, 60, 60),
             scrollbar: Color::Gray,
-            user_message_bg: Color::Rgb(42, 47, 58),   // #2A2F3A
+            user_message_bg: Color::Rgb(42, 47, 58), // #2A2F3A
             assistant_message_bg: Color::Rgb(26, 30, 38), // #1A1E26
-            tool_running: Color::Rgb(255, 215, 0),  // #FFD700
+            tool_running: Color::Rgb(255, 215, 0),   // #FFD700
             tool_completed: Color::Rgb(85, 255, 85),
             tool_failed: Color::Rgb(255, 85, 85),
         }
@@ -323,7 +323,7 @@ pub fn load_custom_theme() -> Option<ThemeColorSet> {
     let home = std::env::var("HOME").ok()?;
     let path = format!("{}/.config/helix-agent/theme.toml", home);
     let content = std::fs::read_to_string(path).ok()?;
-    
+
     let mut colors = ThemeColorSet::dark();
     let mut in_colors = false;
 
@@ -369,4 +369,3 @@ pub fn load_custom_theme() -> Option<ThemeColorSet> {
     }
     Some(colors)
 }
-

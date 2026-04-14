@@ -89,3 +89,50 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 
 ## Traceability
 *Will be mapped by the roadmapper to phases and success criteria.*
+
+---
+
+## Milestone v1.3 Requirements (Gap Closure: Security, UX, and Market Fit)
+
+### Security & Trust (SEC)
+- [ ] **SEC-01**: Enforce command execution policy tiers (read-only, workspace-write, full) with explicit per-command approval for high-risk operations.
+- [ ] **SEC-02**: Validate and normalize all tool-call arguments with schema-level checks and command argument sanitization before execution.
+- [ ] **SEC-03**: Add prompt-injection resistance policy with pre-execution refusal checks for destructive or exfiltration-intent actions.
+- [ ] **SEC-04**: Add model integrity verification (SHA-256 checksum allowlist + trusted source metadata) before model activation.
+
+### Setup & Onboarding (SETUP)
+- [ ] **SETUP-01**: Provide one-command model install workflow (`helix install <model>`) that auto-selects quantization for detected hardware.
+- [ ] **SETUP-02**: Provide guided first-run onboarding (mode/interface quick tour and safe defaults) in CLI/TUI.
+
+### Session Reliability (SESSION)
+- [ ] **SESSION-01**: Implement automatic session persistence with crash-safe autosave and startup resume prompt.
+- [ ] **SESSION-02**: Implement explicit session lifecycle commands (`/save`, `/load`, `/resume`) with verified persistence backend.
+
+### Performance & Runtime Reliability (PERF)
+- [ ] **PERF-04**: Add hardware-aware runtime profile selection for CPU-only systems to reduce TTFT and avoid perceived freeze.
+- [ ] **PERF-05**: Add inference watchdog (memory/health monitor + controlled restart policy) for long-running stability.
+
+### Enterprise & Extensibility (ENT)
+- [ ] **ENT-01**: Implement structured, queryable audit logs for every tool call and policy decision (timestamp, actor, inputs hash, outcome).
+- [ ] **ENT-02**: Provide plugin/tool SDK with registration, permission declaration, and sandbox boundary contracts.
+
+### Workflow Reach (IDE)
+- [ ] **IDE-01**: Provide IDE integration foundation (local API contract + extension bridge spec) for in-editor usage.
+
+## v1.3 Traceability Matrix
+
+| Requirement ID | Phase | Status |
+|----------------|-------|--------|
+| SEC-01 | 20-security-execution-guardrails | Pending |
+| SEC-02 | 20-security-execution-guardrails | Pending |
+| SEC-03 | 20-security-execution-guardrails | Pending |
+| SEC-04 | 21-model-integrity-and-install-automation | Pending |
+| SETUP-01 | 21-model-integrity-and-install-automation | Pending |
+| SETUP-02 | 22-onboarding-and-session-resilience | Pending |
+| SESSION-01 | 22-onboarding-and-session-resilience | Pending |
+| SESSION-02 | 22-onboarding-and-session-resilience | Pending |
+| PERF-04 | 23-cpu-ttft-and-runtime-watchdog | Pending |
+| PERF-05 | 23-cpu-ttft-and-runtime-watchdog | Pending |
+| ENT-01 | 24-enterprise-audit-log-mvp | Pending |
+| ENT-02 | 25-plugin-sdk-and-ide-bridge-foundation | Pending |
+| IDE-01 | 25-plugin-sdk-and-ide-bridge-foundation | Pending |

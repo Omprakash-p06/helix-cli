@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::process::Command;
 
+use crate::security::policy::PermissionTier;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub base_url: String,
@@ -11,6 +13,11 @@ pub struct AppConfig {
     pub exec_mode: String,
     pub chat_system_prompt: String,
     pub agentic_system_prompt: String,
+    pub tool_permission_tier: String,
+    pub audit_enabled: bool,
+    pub audit_db_path: String,
+    #[serde(skip)]
+    pub permission_tier: PermissionTier,
 }
 
 impl AppConfig {
@@ -33,7 +40,7 @@ try:
             sys.path.insert(0, candidate)
 
     import config
-    
+
     data = {
         "base_url": getattr(config, 'BASE_URL', 'http://127.0.0.1:8080/v1'),
         "model_name": getattr(config, 'MODEL_NAME', 'gpt-oss-20b'),
@@ -43,6 +50,9 @@ try:
         "exec_mode": os.environ.get("HELIX_EXEC_MODE", "chat"),
         "chat_system_prompt": getattr(config, 'CHAT_SYSTEM_PROMPT', 'You are Helix running in chat mode. Reply directly and concisely. Never expose internal reasoning, analysis, or chain-of-thought. Do not output <think>, <thinking>, or <analysis> tags.'),
         "agentic_system_prompt": getattr(config, 'AGENTIC_SYSTEM_PROMPT', 'You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths - verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise. You have local tool access through these tools, so do not ask the user to run local file-system commands when a tool can do it.'),
+        "tool_permission_tier": getattr(config, 'TOOL_PERMISSION_TIER', 'workspace_write'),
+        "audit_enabled": getattr(config, 'AUDIT_ENABLED', True),
+        "audit_db_path": getattr(config, 'AUDIT_DB_PATH', 'logs/audit.db'),
     }
     print(json.dumps(data))
 except Exception as e:
@@ -63,13 +73,56 @@ except Exception as e:
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let config: AppConfig = serde_json::from_str(&stdout).map_err(|e| {
+        let mut config: AppConfig = serde_json::from_str(&stdout).map_err(|e| {
             format!(
                 "Failed to parse JSON config from python: {} - '{}'",
                 e, stdout
             )
         })?;
 
+        config.permission_tier = PermissionTier::from_config_value(&config.tool_permission_tier)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "[Config Warning] Invalid TOOL_PERMISSION_TIER='{}'. Falling back to 'workspace_write'.",
+                    config.tool_permission_tier
+                );
+                PermissionTier::WorkspaceWrite
+            });
+
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_permission_tier_defaults_to_workspace_write_when_missing_equivalent() {
+        let parsed = PermissionTier::from_config_value("workspace_write").unwrap_or_default();
+        assert_eq!(parsed, PermissionTier::WorkspaceWrite);
+    }
+
+    #[test]
+    fn valid_tool_permission_tier_values_map_correctly() {
+        assert_eq!(
+            PermissionTier::from_config_value("read_only"),
+            Some(PermissionTier::ReadOnly)
+        );
+        assert_eq!(
+            PermissionTier::from_config_value("workspace_write"),
+            Some(PermissionTier::WorkspaceWrite)
+        );
+        assert_eq!(
+            PermissionTier::from_config_value("full_exec"),
+            Some(PermissionTier::FullExec)
+        );
+    }
+
+    #[test]
+    fn invalid_tool_permission_tier_falls_back_to_workspace_write() {
+        let parsed = PermissionTier::from_config_value("invalid-tier")
+            .unwrap_or(PermissionTier::WorkspaceWrite);
+        assert_eq!(parsed, PermissionTier::WorkspaceWrite);
     }
 }

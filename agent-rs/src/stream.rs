@@ -6,7 +6,7 @@ pub enum SseEvent {
 
 #[derive(Debug, Default)]
 pub struct SseParser {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl SseParser {
@@ -15,7 +15,7 @@ impl SseParser {
     }
 
     pub fn push_bytes(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
-        self.buffer.push_str(&String::from_utf8_lossy(bytes));
+        self.buffer.extend_from_slice(bytes);
         self.drain_events(false)
     }
 
@@ -26,21 +26,24 @@ impl SseParser {
     fn drain_events(&mut self, flush_partial: bool) -> Vec<SseEvent> {
         let mut events = Vec::new();
 
-        while let Some(newline_idx) = self.buffer.find('\n') {
-            let mut line = self.buffer[..newline_idx].to_string();
-            if line.ends_with('\r') {
-                line.pop();
-            }
+        while let Some(newline_idx) = self.buffer.iter().position(|&b| b == b'\n') {
+            let line_bytes = self.buffer.drain(..newline_idx).collect::<Vec<u8>>();
+            self.buffer.drain(..1); // consume '\n'
 
-            self.buffer.drain(..(newline_idx + 1));
-            if let Some(event) = parse_data_line(&line) {
+            let line = String::from_utf8_lossy(&line_bytes);
+            let trimmed = line.trim_end_matches('\r');
+
+            if let Some(event) = parse_data_line(trimmed) {
                 events.push(event);
             }
         }
 
         if flush_partial && !self.buffer.is_empty() {
-            let line = std::mem::take(&mut self.buffer);
-            if let Some(event) = parse_data_line(line.trim_end_matches('\r')) {
+            let line_bytes = std::mem::take(&mut self.buffer);
+            let line = String::from_utf8_lossy(&line_bytes);
+            let trimmed = line.trim_end_matches('\r');
+
+            if let Some(event) = parse_data_line(trimmed) {
                 events.push(event);
             }
         }
@@ -134,5 +137,27 @@ mod tests {
             parser.finish(),
             vec![SseEvent::Data("tail-without-newline".to_string())]
         );
+    }
+
+    #[test]
+    fn handles_split_utf8_across_chunks() {
+        let mut parser = SseParser::new();
+        // Emoji "👋" is 4 bytes in UTF-8: [0xF0, 0x9F, 0x91, 0x8B]
+        let part1 = b"data: ";
+        let part2 = &[0xF0, 0x9F];
+        let part3 = &[0x91, 0x8B];
+        let part4 = b"\n";
+
+        assert!(parser.push_bytes(part1).is_empty());
+        assert!(parser.push_bytes(part2).is_empty());
+        assert!(parser.push_bytes(part3).is_empty());
+        
+        let events = parser.push_bytes(part4);
+        assert_eq!(events.len(), 1);
+        if let SseEvent::Data(data) = &events[0] {
+            assert_eq!(data, "👋");
+        } else {
+            panic!("Expected Data event");
+        }
     }
 }

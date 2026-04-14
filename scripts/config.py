@@ -41,8 +41,12 @@ AGENTIC_SYSTEM_PROMPT = (
 )
 
 REQUIRE_CONFIRMATION = True
+TOOL_PERMISSION_TIER = "workspace_write"
 LOG_COMMANDS = True
 LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
+
+AUDIT_ENABLED = True
+AUDIT_DB_PATH = os.path.join(LOG_DIR, "audit.db")
 
 DANGEROUS_COMMANDS = ["rm", "mv", "chmod", "dd", "mkfs", "fdisk", "systemctl", "reboot", "shutdown"]

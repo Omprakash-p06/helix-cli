@@ -42,3 +42,4 @@ koboldcpp-linux-x64
 .planning/debug/*.md
 init_map.json
 .codex
+misc/
