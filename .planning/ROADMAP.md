@@ -237,3 +237,26 @@ Plans:
 
 - [x] 26-01-PLAN.md - Byte-level streaming and rich TUI timeline refinement.
 - [x] 26-02-PLAN.md - Shared async tool runtime contracts and cross-surface consolidation.
+
+### Phase 27: TUI Animations & Settings Panel
+
+**Goal:** Add polished animations (spinner, fade effects, progress gauge) and a settings modal for user configuration.
+**Requirements**: TUI-01, TUI-02, TUI-03, TUI-04, TUI-05
+**Depends on:** Phase 26
+**Gap Closure:** Adds user-requested TUI polish features
+**Plans:** 0/2 plans
+
+Plans:
+- [ ] 27-01-PLAN.md — Throbber widgets, fade effects, token gauge animation
+- [ ] 27-02-PLAN.md — Settings modal with model/mode/theme/permissions
+
+### Phase 28: GSD Workflow Integration
+
+**Goal:** Integrate GSD (Get Shit Done) commands for structured project management.
+**Requirements**: TBD
+**Depends on:** Phase 27
+**Gap Closure:** Adds GSD protocol commands
+**Plans:** 0/1 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — GSD adapter, commands, phase planning

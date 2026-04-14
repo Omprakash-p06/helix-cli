@@ -119,6 +119,18 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 ### Workflow Reach (IDE)
 - [ ] **IDE-01**: Provide IDE integration foundation (local API contract + extension bridge spec) for in-editor usage.
 
+### Terminal UI Polish (TUI-POLISH)
+- [ ] **TUI-06**: Add throbber/spinner animation for "thinking" state before first token arrives.
+- [ ] **TUI-07**: Add fade-in effect for new messages (opacity 0→100% over 150ms).
+- [ ] **TUI-08**: Add pulsing status indicator for tool execution, green/red flash on completion.
+- [ ] **TUI-09**: Add animated token usage gauge that smoothly updates.
+- [ ] **TUI-10**: Add settings modal with model selection, mode, theme, token limit, and permissions.
+
+### Workflow Commands (GSD)
+- [ ] **GSD-01**: Implement GSD adapter with /gsd-* commands for project management.
+- [ ] **GSD-02**: Implement /gsd new-project, /gsd discuss-phase, /gsd plan-phase commands.
+- [ ] **GSD-03**: Implement /gsd execute-phase and /gsd verify-work for phase execution.
+
 ## v1.3 Traceability Matrix
 
 | Requirement ID | Phase | Status |
@@ -136,3 +148,11 @@ Completely strip all "helpful assistant" personality traits, greetings, and conv
 | ENT-01 | 24-enterprise-audit-log-mvp | Pending |
 | ENT-02 | 25-plugin-sdk-and-ide-bridge-foundation | Pending |
 | IDE-01 | 25-plugin-sdk-and-ide-bridge-foundation | Pending |
+| TUI-06 | 27-tui-animations-and-settings-panel | Pending |
+| TUI-07 | 27-tui-animations-and-settings-panel | Pending |
+| TUI-08 | 27-tui-animations-and-settings-panel | Pending |
+| TUI-09 | 27-tui-animations-and-settings-panel | Pending |
+| TUI-10 | 27-tui-animations-and-settings-panel | Pending |
+| GSD-01 | 28-gsd-workflow-integration | Pending |
+| GSD-02 | 28-gsd-workflow-integration | Pending |
+| GSD-03 | 28-gsd-workflow-integration | Pending |
