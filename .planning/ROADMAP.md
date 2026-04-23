@@ -241,14 +241,14 @@ Plans:
 ### Phase 27: TUI Animations & Settings Panel
 
 **Goal:** Add polished animations (spinner, fade effects, progress gauge) and a settings modal for user configuration.
-**Requirements**: TUI-01, TUI-02, TUI-03, TUI-04, TUI-05
+**Requirements**: TUI-06, TUI-07, TUI-08, TUI-09, TUI-10
 **Depends on:** Phase 26
 **Gap Closure:** Adds user-requested TUI polish features
-**Plans:** 0/2 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] 27-01-PLAN.md — Throbber widgets, fade effects, token gauge animation
-- [ ] 27-02-PLAN.md — Settings modal with model/mode/theme/permissions
+- [ ] 27-01-PLAN.md — TUI Animations & Event Loop Upgrade
+- [ ] 27-02-PLAN.md — Settings Modal & User Configuration
 
 ### Phase 28: GSD Workflow Integration
 
