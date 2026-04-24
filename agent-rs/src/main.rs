@@ -2020,13 +2020,10 @@ async fn run_llm_loop_tui(
                     // Forward lifecycle events to TUI
                     tokio::spawn(async move {
                         while let Some(ev) = event_rx_inner.recv().await {
-                            match ev {
-                                ToolLifecycle::Start { name: _name, id: _ } => {
-                                    // Need arguments for ToolInfo but ToolLifecycle doesn't carry them yet.
-                                    // Actually, we can just send ToolStart here if we had arguments.
-                                    // Let's stick to the core plan of using ToolRuntime.
-                                }
-                                _ => {}
+                            if let ToolLifecycle::Start { name: _name, id: _ } = ev {
+                                // Need arguments for ToolInfo but ToolLifecycle doesn't carry them yet.
+                                // Actually, we can just send ToolStart here if we had arguments.
+                                // Let's stick to the core plan of using ToolRuntime.
                             }
                         }
                     });

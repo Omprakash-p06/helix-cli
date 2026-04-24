@@ -18,8 +18,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap, block::Title},
 };
 use std::io;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
@@ -68,6 +73,10 @@ pub enum TuiAction {
     CloseCommandPalette,
     /// Select a command from the palette by index.
     SelectCommand(usize),
+    /// Open the settings modal.
+    OpenSettings,
+    /// Close the settings modal.
+    CloseSettings,
     /// Set the TUI layout mode.
     SetLayout(api::TuiLayoutMode),
     /// Set a named theme.
@@ -134,6 +143,7 @@ enum InputMode {
     Normal,
     Preview,
     Help,
+    Settings,
 }
 
 /// A styled span within a chat entry.
@@ -181,6 +191,7 @@ pub struct TuiApp {
     pub cwd: String,
     pub current_tokens: usize,
     pub max_tokens: usize,
+    animations: state::AnimationState,
     // ── Phase 19/26 additions ──
     layout_mode: api::TuiLayoutMode,
     sidebar_visible: bool,
@@ -190,6 +201,8 @@ pub struct TuiApp {
     model_name: String,
     exec_mode_label: String,
     connection_label: String,
+    current_theme: state::ThemeName,
+    settings: state::SettingsState,
 }
 
 impl TuiApp {
@@ -217,6 +230,7 @@ impl TuiApp {
             cwd: Self::get_formatted_cwd(),
             current_tokens: 0,
             max_tokens: 8192,
+            animations: state::AnimationState::new(),
             layout_mode,
             sidebar_visible: true,
             sidebar_tab: state::SidebarTab::ContextFiles,
@@ -225,6 +239,8 @@ impl TuiApp {
             model_name: String::new(),
             exec_mode_label: String::new(),
             connection_label: String::from("connecting"),
+            current_theme: state::ThemeName::Dark,
+            settings: state::SettingsState::new(),
         }
     }
 
@@ -283,15 +299,15 @@ impl TuiApp {
 
         self.command_history.push(trimmed.clone());
         self.history_index = None;
-        self.chat_history.push(ChatEntry {
-            role: "user".to_string(),
-            content: trimmed.clone(),
-            spans: vec![ChatSpan {
+        self.push_chat_entry(
+            "user",
+            trimmed.clone(),
+            vec![ChatSpan {
                 text: trimmed.clone(),
                 style: Style::default(),
             }],
-            tool_id: None,
-        });
+            None,
+        );
         // Follow the latest message after submission so new responses stay visible.
         self.scroll_offset = 0;
         Some(trimmed)
@@ -380,17 +396,75 @@ impl TuiApp {
                 .replace("<think>", "")
                 .replace("</think>", "");
 
-            self.chat_history.push(ChatEntry {
-                role: "assistant".to_string(),
-                content: clean_content,
-                spans: self.streaming_spans.clone(),
-                tool_id: None,
-            });
+            self.push_chat_entry("assistant", clean_content, self.streaming_spans.clone(), None);
             self.streaming_content.clear();
             self.streaming_spans.clear();
             self.streaming_heartbeat = None;
             self.in_think_block = false;
         }
+    }
+
+    fn push_chat_entry(
+        &mut self,
+        role: impl Into<String>,
+        content: String,
+        spans: Vec<ChatSpan>,
+        tool_id: Option<u64>,
+    ) {
+        self.chat_history.push(ChatEntry {
+            role: role.into(),
+            content,
+            spans,
+            tool_id,
+        });
+        let message_index = self.chat_history.len().saturating_sub(1);
+        self.animations.register_message_fade(message_index);
+    }
+
+    fn is_thinking(&self) -> bool {
+        self.is_generating && self.streaming_content.is_empty()
+    }
+
+    fn theme_colors(&self) -> themes::ThemeColorSet {
+        self.current_theme.colors()
+    }
+
+    fn animated_tokens_display(&self) -> usize {
+        self.animations
+            .animated_tokens
+            .round()
+            .clamp(0.0, self.max_tokens as f32) as usize
+    }
+
+    fn on_tick(&mut self, dt: Duration) {
+        self.animations
+            .on_tick(self.is_thinking(), self.current_tokens, dt);
+    }
+
+    fn sync_settings_from_app(&mut self) {
+        self.settings.model_name = if self.model_name.is_empty() {
+            "gpt-oss-20b".to_string()
+        } else {
+            self.model_name.clone()
+        };
+        self.settings.exec_mode = if self.exec_mode_label.is_empty() {
+            "chat".to_string()
+        } else {
+            self.exec_mode_label.clone()
+        };
+        self.settings.token_limit_input = self.max_tokens.to_string();
+        self.settings.theme = self.current_theme;
+        self.settings.sidebar_visible = self.sidebar_visible;
+    }
+
+    fn apply_settings_to_app(&mut self) {
+        self.model_name = self.settings.model_name.clone();
+        self.exec_mode_label = self.settings.exec_mode.clone();
+        if let Ok(limit) = self.settings.token_limit_input.parse::<usize>() {
+            self.max_tokens = limit.max(1);
+        }
+        self.current_theme = self.settings.theme;
+        self.sidebar_visible = self.settings.sidebar_visible;
     }
 
     pub fn toggle_tool_collapsed(&mut self, id: u64) {
@@ -456,24 +530,27 @@ fn draw(frame: &mut Frame, app: &mut TuiApp) {
         draw_preview_overlay(frame, app, size);
     } else if app.input_mode == InputMode::Help {
         draw_help_overlay(frame, app, size);
+    } else if app.input_mode == InputMode::Settings {
+        draw_settings_modal(frame, app, size);
     }
 }
 
 /// Render the sidebar with context files and session info.
 fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let theme = app.theme_colors();
 
     let header_style = if app.no_color {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(theme.title)
             .add_modifier(Modifier::BOLD)
     };
     let body_style = if app.no_color {
         Style::default()
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(theme.foreground)
     };
 
     // Sidebar Tabs
@@ -508,8 +585,9 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
             // Section: Token Usage
             lines.push(Line::from(Span::styled("📈 Tokens", header_style)));
+            let animated_tokens = app.animated_tokens_display();
             let ratio = if app.max_tokens > 0 {
-                (app.current_tokens as f64) / (app.max_tokens as f64)
+                (animated_tokens as f64) / (app.max_tokens as f64)
             } else {
                 0.0
             };
@@ -517,7 +595,7 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
             let empty = 10usize.saturating_sub(filled);
             let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
             lines.push(Line::from(Span::styled(
-                format!("  [{}/{}]", app.current_tokens, app.max_tokens),
+                format!("  [{}/{}]", animated_tokens, app.max_tokens),
                 body_style,
             )));
             lines.push(Line::from(Span::styled(format!("  {}", bar), body_style)));
@@ -529,18 +607,47 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
                 lines.push(Line::from(Span::styled("  (no tools run)", body_style)));
             } else {
                 for entry in app.tool_timeline.iter().rev().take(15) {
-                    let (icon, color) = match entry.status {
+                    let (icon, base_color) = match entry.status {
                         state::ToolTimelineStatus::Running => ("⚙", Color::Cyan),
                         state::ToolTimelineStatus::Completed => ("✓", Color::Green),
                         state::ToolTimelineStatus::Failed => ("✗", Color::Red),
+                    };
+                    let effect = app.animations.tool_effect(entry.id);
+                    let color = effect
+                        .and_then(|effect| effect.flash_color())
+                        .or_else(|| entry.active_flash_color())
+                        .unwrap_or_else(|| {
+                            if entry.status == state::ToolTimelineStatus::Running
+                                && effect.map(|effect| effect.pulse_intensity()).unwrap_or(0.0) > 0.5
+                            {
+                                Color::Yellow
+                            } else {
+                                base_color
+                            }
+                        });
+                    let icon_style = if effect.map(|effect| effect.flash_intensity()).unwrap_or(0.0) > 0.0
+                        || entry.status == state::ToolTimelineStatus::Running
+                            && effect.map(|effect| effect.pulse_intensity()).unwrap_or(0.0) > 0.5
+                    {
+                        Style::default().fg(color).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(color)
                     };
                     let duration = entry
                         .duration_ms
                         .map(|d| format!(" ({}ms)", d))
                         .unwrap_or_default();
                     lines.push(Line::from(vec![
-                        Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+                        Span::styled(format!("  {} ", icon), icon_style),
                         Span::styled(entry.name.clone(), body_style),
+                        Span::styled(
+                            if entry.args_preview.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" {}", entry.args_preview)
+                            },
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(duration, Style::default().fg(Color::DarkGray)),
                     ]));
                 }
@@ -563,7 +670,7 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
                 .style(Style::default().fg(if app.no_color {
                     Color::Reset
                 } else {
-                    Color::DarkGray
+                    theme.border
                 })),
         )
         .wrap(Wrap { trim: false });
@@ -629,6 +736,138 @@ fn draw_help_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn is_think_span(chat_span: &ChatSpan) -> bool {
     chat_span.style.add_modifier == Modifier::DIM || (chat_span.style.fg == Some(Color::DarkGray))
+}
+
+fn apply_animation_style(style: Style, opacity: f32, no_color: bool) -> Style {
+    if opacity >= 0.99 {
+        return style;
+    }
+
+    let mut animated = style;
+    if opacity < 0.67 {
+        animated = animated.add_modifier(Modifier::DIM);
+    }
+    if !no_color {
+        animated = animated.fg(if opacity < 0.34 {
+            Color::DarkGray
+        } else {
+            style.fg.unwrap_or(Color::Gray)
+        });
+    }
+    animated
+}
+
+fn display_theme_name(theme: state::ThemeName) -> &'static str {
+    match theme {
+        state::ThemeName::Dark => "Dark",
+        state::ThemeName::Light => "Light",
+        state::ThemeName::Nord => "Nord",
+        state::ThemeName::Gruvbox => "Gruvbox",
+        state::ThemeName::Custom => "Custom",
+    }
+}
+
+fn draw_settings_modal(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let theme = app.theme_colors();
+    let popup = centered_rect(60, 40, area);
+    let sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
+        .split(popup);
+
+    let category_lines: Vec<Line<'static>> = state::SettingsCategory::all()
+        .iter()
+        .enumerate()
+        .map(|(idx, category)| {
+            let style = if idx == app.settings.selected_item {
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.foreground)
+            };
+            Line::from(Span::styled(format!("  {}", category.title()), style))
+        })
+        .collect();
+
+    let details: Vec<String> = match app.settings.selected_category() {
+        state::SettingsCategory::General => vec![
+            format!(
+                "{} Model Name: {}",
+                if app.settings.selected_detail == 0 { "›" } else { " " },
+                app.settings.model_name
+            ),
+            format!(
+                "{} Execution Mode: {}",
+                if app.settings.selected_detail == 1 { "›" } else { " " },
+                app.settings.exec_mode
+            ),
+            format!(
+                "{} Token Limit: {}",
+                if app.settings.selected_detail == 2 { "›" } else { " " },
+                app.settings.token_limit_input
+            ),
+        ],
+        state::SettingsCategory::Interface => vec![
+            format!(
+                "{} Theme: {}",
+                if app.settings.selected_detail == 0 { "›" } else { " " },
+                display_theme_name(app.settings.theme)
+            ),
+            format!(
+                "{} Sidebar: {}",
+                if app.settings.selected_detail == 1 { "›" } else { " " },
+                if app.settings.sidebar_visible {
+                    "Visible"
+                } else {
+                    "Hidden"
+                }
+            ),
+        ],
+        state::SettingsCategory::Security => vec![format!(
+            "{} Permission Tier: {}",
+            if app.settings.selected_detail == 0 { "›" } else { " " },
+            app.settings.permission_tier.label()
+        )],
+    };
+
+    let detail_lines: Vec<Line<'static>> = details
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, Style::default().fg(theme.foreground))))
+        .chain([
+            Line::from(""),
+            Line::from(Span::styled(
+                "Up/Down: categories  Left/Right: fields",
+                Style::default().fg(theme.subtitle),
+            )),
+            Line::from(Span::styled(
+                "Enter: change value  Esc: close",
+                Style::default().fg(theme.subtitle),
+            )),
+        ])
+        .collect();
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(category_lines).block(
+            Block::default()
+                .title(" Categories ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(theme.border_focused)),
+        ),
+        sections[0],
+    );
+    frame.render_widget(
+        Paragraph::new(detail_lines)
+            .block(
+                Block::default()
+                    .title(" Settings ")
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(theme.border)),
+            )
+            .wrap(Wrap { trim: false }),
+        sections[1],
+    );
 }
 
 fn push_multiline_plain_entry(
@@ -702,6 +941,7 @@ fn push_multiline_spans_entry(
 
 fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let theme = app.theme_colors();
 
     // Welcome banner (first time)
     if app.chat_history.is_empty() && !app.is_generating {
@@ -754,14 +994,15 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
     }
 
     // Chat history
-    for entry in &app.chat_history {
+    for (index, entry) in app.chat_history.iter().enumerate() {
+        let opacity = app.animations.message_opacity(index);
         let (prefix, prefix_style) = match entry.role.as_str() {
             "user" => {
                 let s = if app.no_color {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme.user_message)
                         .add_modifier(Modifier::BOLD)
                 };
                 ("▶ You: ", s)
@@ -770,7 +1011,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
                 let s = if app.no_color {
                     Style::default()
                 } else {
-                    Style::default().fg(Color::Blue)
+                    Style::default().fg(theme.assistant_message)
                 };
                 ("◆ Helix: ", s)
             }
@@ -778,7 +1019,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
                 let s = if app.no_color {
                     Style::default()
                 } else {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(theme.tool_message)
                 };
                 ("⚙ Tool: ", s)
             }
@@ -786,7 +1027,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
                 let s = if app.no_color {
                     Style::default().add_modifier(Modifier::DIM)
                 } else {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(theme.info)
                 };
                 ("🔧 ", s)
             }
@@ -794,35 +1035,48 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
                 let s = if app.no_color {
                     Style::default()
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.system_message)
                 };
                 ("ℹ ", s)
             }
             _ => ("  ", Style::default()),
         };
+        let prefix_style = apply_animation_style(prefix_style, opacity, app.no_color);
 
         // Handle collapsed tool blocks
-        if let Some(tid) = entry.tool_id {
-            if app.is_tool_collapsed(tid) {
+        if let Some(tid) = entry.tool_id
+            && app.is_tool_collapsed(tid) {
                 lines.push(Line::from(vec![
                     Span::styled(prefix, prefix_style),
                     Span::styled(
                         format!("{} [collapsed]", entry.content),
-                        Style::default().add_modifier(Modifier::DIM),
+                        apply_animation_style(
+                            Style::default().add_modifier(Modifier::DIM),
+                            opacity,
+                            app.no_color,
+                        ),
                     ),
                 ]));
                 lines.push(Line::from(""));
                 continue;
             }
-        }
 
         // Use spans if available (for assistant entries with think blocks)
         if !entry.spans.is_empty() && entry.role == "assistant" {
+            let spans: Vec<ChatSpan> = entry
+                .spans
+                .iter()
+                .cloned()
+                .map(|mut span| {
+                    span.style = apply_animation_style(span.style, opacity, app.no_color);
+                    span
+                })
+                .collect();
             push_multiline_spans_entry(
                 &mut lines,
                 prefix,
                 prefix_style,
-                &entry.spans,
+                &spans,
                 app.show_thoughts,
             );
         } else {
@@ -837,7 +1091,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             let prefix_style = if app.no_color {
                 Style::default()
             } else {
-                Style::default().fg(Color::Blue)
+                Style::default().fg(theme.assistant_message)
             };
             push_multiline_spans_entry(
                 &mut lines,
@@ -850,7 +1104,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             let style = if app.no_color {
                 Style::default()
             } else {
-                Style::default().fg(Color::Blue)
+                Style::default().fg(theme.assistant_message)
             };
             push_multiline_plain_entry(&mut lines, "◆ Helix: ", style, &app.streaming_content);
         }
@@ -860,9 +1114,36 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             Style::default().fg(Color::DarkGray)
         };
         lines.push(Line::from(Span::styled("  ▍generating...", indicator)));
-    } else if app.is_generating
-        && let Some(heartbeat) = &app.streaming_heartbeat
-    {
+    } else if app.is_thinking() {
+        let spinner_style = if app.no_color {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        };
+        let message = app
+            .streaming_heartbeat
+            .as_deref()
+            .unwrap_or("Thinking...");
+        lines.push(Line::from(vec![
+            Span::styled("◆ Helix: ", Style::default().fg(theme.assistant_message)),
+            Span::styled(
+                format!("{} ", app.animations.throbber_state.current_frame()),
+                spinner_style,
+            ),
+            Span::styled(
+                message.to_string(),
+                if app.no_color {
+                    Style::default().add_modifier(Modifier::DIM)
+                } else {
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM)
+                },
+            ),
+        ]));
+    } else if app.is_generating && let Some(heartbeat) = &app.streaming_heartbeat {
         let style = if app.no_color {
             Style::default().add_modifier(Modifier::DIM)
         } else {
@@ -898,6 +1179,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
 
 fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let input_text = app.input.value();
+    let theme = app.theme_colors();
     let multiline_indicator = if !app.multiline_buffer.is_empty() {
         format!("[{}+] ", app.multiline_buffer.len())
     } else {
@@ -910,7 +1192,7 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
             if app.no_color {
                 Style::default()
             } else {
-                Style::default().fg(Color::Green)
+                Style::default().fg(theme.user_message)
             },
         ),
         Span::raw(input_text),
@@ -928,15 +1210,16 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
         ));
     }
 
+    let animated_tokens = app.animated_tokens_display();
     let ratio = if app.max_tokens > 0 {
-        (app.current_tokens as f64) / (app.max_tokens as f64)
+        (animated_tokens as f64) / (app.max_tokens as f64)
     } else {
         0.0
     };
     let filled = (ratio * 10.0).round() as usize;
     let empty = 10usize.saturating_sub(filled);
     let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-    let hud = format!(" [{}/{} tok] {} ", app.current_tokens, app.max_tokens, bar);
+    let hud = format!(" [{}/{} tok] {} ", animated_tokens, app.max_tokens, bar);
 
     let input_widget = Paragraph::new(Line::from(spans)).block(
         Block::default()
@@ -958,6 +1241,7 @@ fn draw_input_area(frame: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let theme = app.theme_colors();
     // Build left segment: model | mode | status
     let model_part = if !app.model_name.is_empty() {
         format!("model: {} | ", app.model_name)
@@ -969,12 +1253,19 @@ fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         String::new()
     };
-    let left = format!(" {}{}{} ", model_part, mode_part, app.status_text);
+    let thinking_prefix = if app.is_thinking() {
+        format!("{} ", app.animations.throbber_state.current_frame())
+    } else {
+        String::new()
+    };
+    let left = format!(" {}{}{}{} ", model_part, mode_part, thinking_prefix, app.status_text);
 
     // Build right segment: [current/max tok] | connection
     let right = format!(
         " [{}/{} tok] | {} ",
-        app.current_tokens, app.max_tokens, app.connection_label
+        app.animated_tokens_display(),
+        app.max_tokens,
+        app.connection_label
     );
 
     let bar_width = area.width as usize;
@@ -985,7 +1276,7 @@ fn draw_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let style = if app.no_color {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
-        Style::default().fg(Color::White).bg(Color::DarkGray)
+        Style::default().fg(theme.foreground).bg(theme.background)
     };
 
     let status = Paragraph::new(Span::styled(bar_text, style));
@@ -1067,6 +1358,23 @@ pub async fn run_tui(
         let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
         let mut app = TuiApp::new(layout_mode);
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Event>();
+        let stop_input = Arc::new(AtomicBool::new(false));
+        let stop_input_reader = Arc::clone(&stop_input);
+
+        tokio::task::spawn_blocking(move || {
+            while !stop_input_reader.load(Ordering::Relaxed) {
+                if event::poll(Duration::from_millis(16)).unwrap_or(false)
+                    && let Ok(ev) = event::read()
+                    && input_tx.send(ev).is_err() {
+                        break;
+                    }
+            }
+        });
+
+        let mut tick = tokio::time::interval(Duration::from_millis(33));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut last_tick = Instant::now();
 
         loop {
             // Draw
@@ -1074,84 +1382,69 @@ pub async fn run_tui(
                 .draw(|f| draw(f, &mut app))
                 .expect("Failed to draw");
 
-            // Poll for events (crossterm keyboard) or orchestrator events
             tokio::select! {
-                // Keyboard input
-                _ = tokio::task::spawn_blocking(|| {
-                    event::poll(std::time::Duration::from_millis(50)).unwrap_or(false)
-                }) => {
-                    if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false)
-                        && let Ok(ev) = event::read() {
-                            match ev {
-                                Event::Key(key) => {
-                                    match handle_key_event(&mut app, key, &action_tx) {
-                                        LoopAction::Quit => break,
-                                        LoopAction::OpenEditor => {
-                                            use std::process::Command;
-                                            use std::io::Write;
-                                            use std::fs::File;
-
-                                            // Determine editor
-                                            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-
-                                            // Write current input to tmp file
-                                            let tmp_dir = std::env::temp_dir();
-                                            let file_path = tmp_dir.join(format!("helix_input_{}.md", std::process::id()));
-
-                                            let current_text = if app.multiline_buffer.is_empty() {
-                                                app.input.value().to_string()
-                                            } else {
-                                                let mut lines = app.multiline_buffer.clone();
-                                                lines.push(app.input.value().to_string());
-                                                lines.join("\n")
-                                            };
-
-                                            if let Ok(mut file) = File::create(&file_path) {
-                                                let _ = file.write_all(current_text.as_bytes());
-                                            }
-
-                                            // Cleanup terminal
-                                            let _ = disable_raw_mode();
-                                            let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-
-                                            // Run editor
-                                            let _ = Command::new(editor).arg(&file_path).status();
-
-                                            // Restore terminal
-                                            let _ = enable_raw_mode();
-                                            let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
-                                            let _ = terminal.clear();
-
-                                            // Read back
-                                            if let Ok(content) = std::fs::read_to_string(&file_path) {
-                                                let mut lines: Vec<String> = content.lines().map(String::from).collect();
-                                                if content.ends_with('\n') && !lines.is_empty() {
-                                                    // allow empty last line if trailing newline
-                                                }
-                                                if lines.is_empty() {
-                                                    app.multiline_buffer.clear();
-                                                    app.input.reset();
-                                                } else {
-                                                    let last = lines.pop().unwrap_or_default();
-                                                    app.multiline_buffer = lines;
-                                                    app.input = Input::new(last);
-                                                }
-                                                let _ = std::fs::remove_file(&file_path);
-                                            }
-                                            app.status_text = "Editor closed".to_string();
-                                        }
-                                        LoopAction::Continue => {}
-                                    }
-                                }
-                                Event::Resize(_, _) => {
-                                    // Terminal will redraw automatically
-                                }
-                                _ => {}
-                            }
-                        }
+                _ = tick.tick() => {
+                    let now = Instant::now();
+                    let dt = now.saturating_duration_since(last_tick);
+                    last_tick = now;
+                    app.on_tick(dt);
                 }
 
-                // Orchestrator events
+                Some(ev) = input_rx.recv() => {
+                    match ev {
+                        Event::Key(key) => {
+                            match handle_key_event(&mut app, key, &action_tx) {
+                                LoopAction::Quit => break,
+                                LoopAction::OpenEditor => {
+                                    use std::fs::File;
+                                    use std::io::Write;
+                                    use std::process::Command;
+
+                                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
+                                    let tmp_dir = std::env::temp_dir();
+                                    let file_path = tmp_dir.join(format!("helix_input_{}.md", std::process::id()));
+
+                                    let current_text = if app.multiline_buffer.is_empty() {
+                                        app.input.value().to_string()
+                                    } else {
+                                        let mut lines = app.multiline_buffer.clone();
+                                        lines.push(app.input.value().to_string());
+                                        lines.join("\n")
+                                    };
+
+                                    if let Ok(mut file) = File::create(&file_path) {
+                                        let _ = file.write_all(current_text.as_bytes());
+                                    }
+
+                                    let _ = disable_raw_mode();
+                                    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+                                    let _ = Command::new(editor).arg(&file_path).status();
+                                    let _ = enable_raw_mode();
+                                    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+                                    let _ = terminal.clear();
+
+                                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                        let mut lines: Vec<String> = content.lines().map(String::from).collect();
+                                        if lines.is_empty() {
+                                            app.multiline_buffer.clear();
+                                            app.input.reset();
+                                        } else {
+                                            let last = lines.pop().unwrap_or_default();
+                                            app.multiline_buffer = lines;
+                                            app.input = Input::new(last);
+                                        }
+                                        let _ = std::fs::remove_file(&file_path);
+                                    }
+                                    app.status_text = "Editor closed".to_string();
+                                }
+                                LoopAction::Continue => {}
+                            }
+                        }
+                        Event::Resize(_, _) => {}
+                        _ => {}
+                    }
+                }
+
                 Some(tui_event) = event_rx.recv() => {
                     match tui_event {
                         TuiEvent::TokenChunk(chunk) => {
@@ -1171,10 +1464,10 @@ pub async fn run_tui(
                             let content = format!("Executing `{}`...", info.name);
                             let tool_id = app.tool_timeline.len() as u64;
 
-                            app.chat_history.push(ChatEntry {
-                                role: "tool_start".to_string(),
-                                content: content.clone(),
-                                spans: vec![ChatSpan {
+                            app.push_chat_entry(
+                                "tool_start",
+                                content.clone(),
+                                vec![ChatSpan {
                                     text: content,
                                     style: if app.no_color {
                                         Style::default().add_modifier(Modifier::DIM)
@@ -1182,27 +1475,25 @@ pub async fn run_tui(
                                         Style::default().fg(Color::Cyan)
                                     },
                                 }],
-                                tool_id: Some(tool_id),
-                            });
+                                Some(tool_id),
+                            );
 
                             // Add to tool_timeline
-                            app.tool_timeline.push(state::ToolTimelineEntry {
-                                id: tool_id,
-                                name: info.name.clone(),
-                                args_preview: truncate_preview_preserving_utf8(&info.arguments, 50),
-                                status: state::ToolTimelineStatus::Running,
-                                duration_ms: None,
-                                started_at: std::time::SystemTime::now(),
-                            });
+                            app.tool_timeline.push(state::ToolTimelineEntry::new(
+                                tool_id,
+                                info.name.clone(),
+                                truncate_preview_preserving_utf8(&info.arguments, 50),
+                            ));
+                            app.animations.register_tool_running(tool_id);
                         }
                         TuiEvent::ToolResult(result) => {
                             let icon = if result.success { "✓" } else { "✗" };
                             let truncated = truncate_preview_preserving_utf8(&result.output, 200);
                             let content = format!("{} {} → {}", icon, result.name, truncated);
-                            app.chat_history.push(ChatEntry {
-                                role: "tool".to_string(),
-                                content: content.clone(),
-                                spans: vec![ChatSpan {
+                            app.push_chat_entry(
+                                "tool",
+                                content.clone(),
+                                vec![ChatSpan {
                                     text: content,
                                     style: if app.no_color {
                                         Style::default()
@@ -1210,23 +1501,16 @@ pub async fn run_tui(
                                         Style::default().fg(Color::Yellow)
                                     },
                                 }],
-                                tool_id: None,
-                            });
+                                None,
+                            );
 
                             // Update tool_timeline
                             if let Some(entry) = app.tool_timeline.iter_mut().rev().find(|e| {
                                 e.name == result.name && e.status == state::ToolTimelineStatus::Running
                             }) {
-                                entry.status = if result.success {
-                                    state::ToolTimelineStatus::Completed
-                                } else {
-                                    state::ToolTimelineStatus::Failed
-                                };
-                                entry.duration_ms = entry
-                                    .started_at
-                                    .elapsed()
-                                    .ok()
-                                    .map(|d| d.as_millis() as u64);
+                                entry.mark_finished(result.success);
+                                app.animations
+                                    .register_tool_finished(entry.id, result.success);
                             }
                         }
                         TuiEvent::Status(text) => {
@@ -1260,12 +1544,13 @@ pub async fn run_tui(
                             app.tool_timeline.clear();
                             app.scroll_offset = 0;
                             app.max_scroll_offset = 0;
+                            app.animations = state::AnimationState::new();
                         }
                         TuiEvent::SystemMessage(msg) => {
-                            app.chat_history.push(ChatEntry {
-                                role: "system".to_string(),
-                                content: msg.clone(),
-                                spans: vec![ChatSpan {
+                            app.push_chat_entry(
+                                "system",
+                                msg.clone(),
+                                vec![ChatSpan {
                                     text: msg,
                                     style: if app.no_color {
                                         Style::default()
@@ -1273,12 +1558,12 @@ pub async fn run_tui(
                                         Style::default().fg(Color::DarkGray)
                                     },
                                 }],
-                                tool_id: None,
-                            });
+                                None,
+                            );
                         }
-                        TuiEvent::ThemeChanged(_theme) => {
-                            // Theme changes are handled by the state module;
-                            // just trigger a redraw (which happens automatically).
+                        TuiEvent::ThemeChanged(theme) => {
+                            app.current_theme = theme;
+                            app.settings.theme = theme;
                         }
                         TuiEvent::ContextSnapshot {
                             tokens_used,
@@ -1293,12 +1578,14 @@ pub async fn run_tui(
                             app.model_name = model_name;
                             app.exec_mode_label = exec_mode;
                             app.connection_label = connection.to_string();
+                            app.sync_settings_from_app();
                         }
                     }
                 }
             }
         }
 
+        stop_input.store(true, Ordering::Relaxed);
         // Cleanup terminal
         disable_raw_mode().expect("Failed to disable raw mode");
         execute!(terminal.backend_mut(), LeaveAlternateScreen)
@@ -1343,6 +1630,84 @@ fn handle_key_event(
             }
             _ => {}
         },
+        InputMode::Settings => match key.code {
+            KeyCode::Esc => {
+                app.input_mode = InputMode::Normal;
+                app.settings.active_modal = false;
+                let _ = action_tx.send(TuiAction::CloseSettings);
+            }
+            KeyCode::Up => {
+                app.settings.prev_category();
+            }
+            KeyCode::Down => {
+                app.settings.next_category();
+            }
+            KeyCode::Left => {
+                app.settings.prev_detail();
+            }
+            KeyCode::Right => {
+                app.settings.next_detail();
+            }
+            KeyCode::Enter => {
+                match app.settings.selected_category() {
+                    state::SettingsCategory::General => if app.settings.selected_detail == 1 {
+                        app.settings.exec_mode = if app.settings.exec_mode == "chat" {
+                            "agentic".to_string()
+                        } else {
+                            "chat".to_string()
+                        };
+                    },
+                    state::SettingsCategory::Interface => match app.settings.selected_detail {
+                        0 => app.settings.theme = app.settings.theme.next(),
+                        1 => app.settings.sidebar_visible = !app.settings.sidebar_visible,
+                        _ => {}
+                    },
+                    state::SettingsCategory::Security => {
+                        app.settings.permission_tier = app.settings.permission_tier.next();
+                    }
+                }
+                app.apply_settings_to_app();
+                app.status_text = format!(
+                    "Updated {}",
+                    app.settings.selected_category().title()
+                );
+            }
+            KeyCode::Backspace => {
+                if matches!(app.settings.selected_category(), state::SettingsCategory::General)
+                    && app.settings.selected_detail == 2
+                {
+                    app.settings.token_limit_input.pop();
+                    if app.settings.token_limit_input.is_empty() {
+                        app.settings.token_limit_input = "0".to_string();
+                    }
+                    app.apply_settings_to_app();
+                }
+            }
+            KeyCode::Char(c) => {
+                if matches!(app.settings.selected_category(), state::SettingsCategory::General) {
+                    match app.settings.selected_detail {
+                        0 => {
+                            if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                                app.settings.model_name.push(c);
+                            }
+                        }
+                        2 if c.is_ascii_digit() => {
+                            if app.settings.token_limit_input == "0" {
+                                app.settings.token_limit_input.clear();
+                            }
+                            app.settings.token_limit_input.push(c);
+                            app.apply_settings_to_app();
+                            app.status_text = format!(
+                                "Token limit: {}",
+                                app.settings.token_limit_input
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        },
         InputMode::Normal => {
             match key.code {
                 // Ctrl+C = interrupt generation or quit
@@ -1375,6 +1740,7 @@ fn handle_key_event(
                 // Ctrl+B = toggle sidebar
                 KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.sidebar_visible = !app.sidebar_visible;
+                    app.settings.sidebar_visible = app.sidebar_visible;
                     app.status_text = if app.sidebar_visible {
                         "Sidebar: visible".to_string()
                     } else {
@@ -1394,6 +1760,14 @@ fn handle_key_event(
                 // Ctrl+E = open external editor
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     return LoopAction::OpenEditor;
+                }
+
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.sync_settings_from_app();
+                    app.settings.active_modal = true;
+                    app.input_mode = InputMode::Settings;
+                    let _ = action_tx.send(TuiAction::OpenSettings);
+                    app.status_text = "Settings opened".to_string();
                 }
 
                 // Alt+Enter = submit (go to preview)

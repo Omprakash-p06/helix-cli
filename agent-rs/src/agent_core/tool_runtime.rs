@@ -5,6 +5,7 @@ use tokio::task::spawn_blocking;
 use tokio::time::{timeout, Duration};
 
 use crate::security::policy::{PolicyContext, PolicyDecision, evaluate_tool_call};
+use crate::security::sandbox::DockerSandbox;
 use crate::tools::{ToolRegistry};
 use crate::audit::{self, AuditStore};
 
@@ -175,8 +176,10 @@ impl ToolRuntime {
         }
 
         let start_time = std::time::Instant::now();
-        
-        let result = if let Some(tool) = registry.get(&func_name) {
+
+        let result = if func_name == "run_terminal_command" {
+            Self::execute_sandboxed_command(&parsed_args, policy_context)
+        } else if let Some(tool) = registry.get(&func_name) {
             tool.execute(parsed_args, dangerous_commands, require_confirmation, policy_context)
         } else {
             ToolResult {
@@ -206,5 +209,69 @@ impl ToolRuntime {
         }
 
         result
+    }
+
+    fn execute_sandboxed_command(parsed_args: &Value, policy_context: &PolicyContext) -> ToolResult {
+        let Some(raw_cmd) = parsed_args.get("command").and_then(|v| v.as_str()) else {
+            return ToolResult {
+                success: false,
+                output: "run_terminal_command requires a 'command' string.".to_string(),
+            };
+        };
+
+        let sandbox = match DockerSandbox::new(policy_context.workspace_root.clone()) {
+            Ok(sandbox) => sandbox,
+            Err(err) => {
+                return ToolResult {
+                    success: false,
+                    output: format!("Sandbox initialization failed: {err}"),
+                };
+            }
+        };
+
+        let handle = tokio::runtime::Handle::current();
+        let command = shell_words::split(raw_cmd).unwrap_or_else(|_| vec![raw_cmd.to_string()]);
+        let output = handle.block_on(async {
+            sandbox
+                .run_command(
+                    command,
+                    "alpine:3.20",
+                    policy_context.workspace_root.clone(),
+                )
+                .await
+        });
+
+        match output {
+            Ok(output) => {
+                let success = output.status_code == 0;
+                let mut rendered = String::new();
+                if !output.stdout.trim().is_empty() {
+                    rendered.push_str("STDOUT:\n");
+                    rendered.push_str(output.stdout.trim_end());
+                    rendered.push('\n');
+                }
+                if !output.stderr.trim().is_empty() {
+                    rendered.push_str("STDERR:\n");
+                    rendered.push_str(output.stderr.trim_end());
+                    rendered.push('\n');
+                }
+                if rendered.is_empty() {
+                    rendered = format!(
+                        "Command completed inside Docker sandbox with exit code {}.",
+                        output.status_code
+                    );
+                } else {
+                    rendered.push_str(&format!("EXIT CODE: {}", output.status_code));
+                }
+                ToolResult {
+                    success,
+                    output: rendered,
+                }
+            }
+            Err(err) => ToolResult {
+                success: false,
+                output: format!("Sandbox execution failed: {err}"),
+            },
+        }
     }
 }

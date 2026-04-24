@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+  <rect width="980" height="560" fill="#f4efe6"/>
+  <text x="60" y="60" font-family="monospace" font-size="28" fill="#1b3a2f">Helix Secure Tool Runtime</text>
+  <text x="60" y="92" font-family="monospace" font-size="14" fill="#49665a">Phase 01 snapshot • 2026-04-24</text>
+
+  <rect x="60" y="140" width="240" height="120" rx="18" fill="#d9ead3" stroke="#1b3a2f" stroke-width="3"/>
+  <text x="85" y="180" font-family="monospace" font-size="22" fill="#1b3a2f">PolicyEngine</text>
+  <text x="85" y="212" font-family="monospace" font-size="14" fill="#1b3a2f">allowlist</text>
+  <text x="85" y="234" font-family="monospace" font-size="14" fill="#1b3a2f">metachar blocking</text>
+
+  <rect x="370" y="140" width="240" height="120" rx="18" fill="#fce5cd" stroke="#7f4b00" stroke-width="3"/>
+  <text x="395" y="180" font-family="monospace" font-size="22" fill="#7f4b00">ToolRuntime</text>
+  <text x="395" y="212" font-family="monospace" font-size="14" fill="#7f4b00">policy gate</text>
+  <text x="395" y="234" font-family="monospace" font-size="14" fill="#7f4b00">audit writes</text>
+
+  <rect x="680" y="140" width="240" height="120" rx="18" fill="#d0e0e3" stroke="#134f5c" stroke-width="3"/>
+  <text x="705" y="180" font-family="monospace" font-size="22" fill="#134f5c">DockerSandbox</text>
+  <text x="705" y="212" font-family="monospace" font-size="14" fill="#134f5c">network=none</text>
+  <text x="705" y="234" font-family="monospace" font-size="14" fill="#134f5c">cap_drop=ALL</text>
+
+  <rect x="370" y="340" width="240" height="120" rx="18" fill="#ead1dc" stroke="#741b47" stroke-width="3"/>
+  <text x="395" y="380" font-family="monospace" font-size="22" fill="#741b47">AuditStore</text>
+  <text x="395" y="412" font-family="monospace" font-size="14" fill="#741b47">append-only sqlite</text>
+  <text x="395" y="434" font-family="monospace" font-size="14" fill="#741b47">hash chain</text>
+
+  <line x1="300" y1="200" x2="370" y2="200" stroke="#1b3a2f" stroke-width="4"/>
+  <polygon points="370,200 356,192 356,208" fill="#1b3a2f"/>
+
+  <line x1="610" y1="200" x2="680" y2="200" stroke="#7f4b00" stroke-width="4"/>
+  <polygon points="680,200 666,192 666,208" fill="#7f4b00"/>
+
+  <line x1="490" y1="260" x2="490" y2="340" stroke="#7f4b00" stroke-width="4"/>
+  <polygon points="490,340 482,326 498,326" fill="#7f4b00"/>
+
+  <text x="130" y="305" font-family="monospace" font-size="14" fill="#1b3a2f">validate command</text>
+  <text x="710" y="305" font-family="monospace" font-size="14" fill="#134f5c">execute safe command</text>
+  <text x="520" y="305" font-family="monospace" font-size="14" fill="#741b47">log allow/deny + output</text>
+</svg>
