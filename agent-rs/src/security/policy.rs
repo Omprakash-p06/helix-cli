@@ -1,7 +1,10 @@
+use path_security::validate_path;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use shell_sanitize::{SanitizeError, Sanitized, Sanitizer, ShellArg};
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +49,151 @@ pub enum PolicyDecision {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecurityError {
+    EmptyCommand,
+    ParseError(String),
+    MetacharacterBlocked(String),
+    DangerousCommand(String),
+    CommandNotAllowlisted(String),
+    PathTraversal {
+        original: String,
+        normalized: String,
+    },
+    Sanitization(String),
+}
+
+impl fmt::Display for SecurityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyCommand => write!(f, "command is empty"),
+            Self::ParseError(err) => write!(f, "failed to parse command: {err}"),
+            Self::MetacharacterBlocked(token) => {
+                write!(f, "shell metacharacter blocked by policy: {token}")
+            }
+            Self::DangerousCommand(cmd) => write!(f, "dangerous command blocked: {cmd}"),
+            Self::CommandNotAllowlisted(cmd) => write!(f, "command not allowlisted: {cmd}"),
+            Self::PathTraversal {
+                original,
+                normalized,
+            } => write!(
+                f,
+                "path escapes workspace: original={original}, normalized={normalized}"
+            ),
+            Self::Sanitization(err) => write!(f, "argument sanitization failed: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for SecurityError {}
+
+const ALLOWLIST: &[&str] = &[
+    "ls", "cat", "pwd", "echo", "git", "rg", "cargo", "npm", "node", "python", "pytest", "sed",
+    "awk", "head", "tail", "wc", "find",
+];
+
+const DANGEROUS_COMMANDS: &[&str] = &[
+    "rm", "dd", "mkfs", "fdisk", "shutdown", "reboot", "systemctl", "sudo", "chmod", "chown",
+];
+
+const SHELL_METACHARACTERS: &[char] = &[
+    '|', ';', '&', '>', '<', '`', '$', '(', ')', '{', '}', '[', ']',
+];
+
+pub struct PolicyEngine {
+    workspace_root: PathBuf,
+    sanitizer: Sanitizer<ShellArg>,
+}
+
+impl PolicyEngine {
+    pub fn new(workspace_root: PathBuf) -> Self {
+        Self {
+            workspace_root,
+            sanitizer: Sanitizer::builder().build(),
+        }
+    }
+
+    pub fn validate_command(&self, input: &str) -> Result<Vec<String>, SecurityError> {
+        let raw = input.trim();
+        if raw.is_empty() {
+            return Err(SecurityError::EmptyCommand);
+        }
+
+        block_metacharacters(raw)?;
+
+        let tokens = shell_words::split(raw)
+            .map_err(|err| SecurityError::ParseError(err.to_string()))?;
+
+        let Some(command) = tokens.first() else {
+            return Err(SecurityError::EmptyCommand);
+        };
+
+        let command = command.to_lowercase();
+        if DANGEROUS_COMMANDS.contains(&command.as_str()) {
+            return Err(SecurityError::DangerousCommand(command));
+        }
+
+        if !ALLOWLIST.contains(&command.as_str()) {
+            return Err(SecurityError::CommandNotAllowlisted(command));
+        }
+
+        let mut normalized = Vec::with_capacity(tokens.len());
+        normalized.push(tokens[0].clone());
+
+        for token in tokens.iter().skip(1) {
+            let sanitized = sanitize_arg(&self.sanitizer, token)?;
+            let normalized_token = self.normalize_token(token, sanitized.as_ref())?;
+            normalized.push(normalized_token);
+        }
+
+        Ok(normalized)
+    }
+
+    fn normalize_token(
+        &self,
+        original: &str,
+        sanitized: &str,
+    ) -> Result<String, SecurityError> {
+        if !looks_like_path(sanitized) {
+            return Ok(sanitized.to_string());
+        }
+
+        let workspace_root = soft_canonicalize::soft_canonicalize(&self.workspace_root)
+            .map_err(|err| SecurityError::Sanitization(err.to_string()))?;
+
+        let candidate = if Path::new(sanitized).is_absolute() {
+            PathBuf::from(sanitized)
+        } else {
+            workspace_root.join(sanitized)
+        };
+
+        let candidate = soft_canonicalize::soft_canonicalize(&candidate)
+            .map_err(|err| SecurityError::Sanitization(err.to_string()))?;
+
+        if candidate.starts_with(&workspace_root) {
+            return Ok(candidate.display().to_string());
+        }
+
+        let relative_input = candidate
+            .strip_prefix(&workspace_root)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(sanitized));
+
+        let validated = validate_path(&relative_input, &workspace_root).map_err(|_| {
+            SecurityError::PathTraversal {
+                original: original.to_string(),
+                normalized: candidate.display().to_string(),
+            }
+        })?;
+
+        Ok(validated.display().to_string())
+    }
+}
+
+pub fn validate_command(input: &str, workspace_root: &Path) -> Result<Vec<String>, SecurityError> {
+    PolicyEngine::new(workspace_root.to_path_buf()).validate_command(input)
+}
+
 pub fn tier_allows_tool(tier: PermissionTier, tool_name: &str) -> bool {
     match tier {
         PermissionTier::ReadOnly => {
@@ -86,7 +234,7 @@ pub fn evaluate_tool_call(tool_name: &str, args: &Value, ctx: &PolicyContext) ->
     PolicyDecision::Allow
 }
 
-pub fn evaluate_command_risk(args: &Value, _ctx: &PolicyContext) -> PolicyDecision {
+pub fn evaluate_command_risk(args: &Value, ctx: &PolicyContext) -> PolicyDecision {
     let Some(raw_cmd) = args.get("command").and_then(|v| v.as_str()) else {
         return PolicyDecision::Deny {
             reason_code: "ARG_MISSING".to_string(),
@@ -95,143 +243,83 @@ pub fn evaluate_command_risk(args: &Value, _ctx: &PolicyContext) -> PolicyDecisi
         };
     };
 
-    let cmd = raw_cmd.trim();
-    if cmd.is_empty() {
-        return PolicyDecision::Deny {
-            reason_code: "ARG_EMPTY".to_string(),
-            message: "Empty command is not allowed.".to_string(),
-            remediation: "Provide a concrete command to execute.".to_string(),
-        };
-    }
-
-    if has_disallowed_operators(cmd) {
-        return PolicyDecision::Deny {
+    match validate_command(raw_cmd, &ctx.workspace_root) {
+        Ok(tokens) => {
+            if is_medium_risk_command(&tokens) {
+                PolicyDecision::RequireApproval {
+                    reason_code: "APPROVAL_REQUIRED".to_string(),
+                    message: "Command is medium-risk and requires explicit approval.".to_string(),
+                }
+            } else {
+                PolicyDecision::Allow
+            }
+        }
+        Err(SecurityError::MetacharacterBlocked(_)) => PolicyDecision::Deny {
             reason_code: "OPERATOR_DENY".to_string(),
             message: "Command chaining/operators are blocked by policy.".to_string(),
             remediation: "Run a single safe command without shell operators.".to_string(),
-        };
-    }
-
-    if matches_sensitive_exfiltration(cmd) {
-        return PolicyDecision::Deny {
-            reason_code: "EXFIL_DENY".to_string(),
-            message: "Potential secret/system-data exfiltration command blocked.".to_string(),
-            remediation: "Remove secret/system file access patterns and retry.".to_string(),
-        };
-    }
-
-    let tokens = tokenize_command(cmd);
-    let Some(first) = tokens.first() else {
-        return PolicyDecision::Deny {
-            reason_code: "TOKENIZE_FAILED".to_string(),
-            message: "Command parsing failed.".to_string(),
-            remediation: "Use a simple command format without shell metacharacters.".to_string(),
-        };
-    };
-
-    if is_destructive_command(first, &tokens) {
-        return PolicyDecision::Deny {
+        },
+        Err(SecurityError::DangerousCommand(_)) => PolicyDecision::Deny {
             reason_code: "DESTRUCTIVE_DENY".to_string(),
             message: "Destructive command blocked by policy.".to_string(),
             remediation: "Use non-destructive alternatives or request human approval.".to_string(),
-        };
-    }
-
-    if !is_allowlisted_command(first) {
-        return PolicyDecision::Deny {
+        },
+        Err(SecurityError::CommandNotAllowlisted(cmd)) => PolicyDecision::Deny {
             reason_code: "COMMAND_DENY".to_string(),
-            message: format!(
-                "Command '{}' is not allowlisted for terminal execution.",
-                first
-            ),
+            message: format!("Command '{}' is not allowlisted for terminal execution.", cmd),
             remediation: "Use an allowlisted command family or file-system tools.".to_string(),
-        };
-    }
-
-    if is_medium_risk_command(first, &tokens) {
-        return PolicyDecision::RequireApproval {
-            reason_code: "APPROVAL_REQUIRED".to_string(),
-            message: "Command is medium-risk and requires explicit approval.".to_string(),
-        };
-    }
-
-    PolicyDecision::Allow
-}
-
-fn tokenize_command(cmd: &str) -> Vec<String> {
-    #[cfg(windows)]
-    {
-        cmd.split_whitespace().map(|s| s.to_string()).collect()
-    }
-    #[cfg(not(windows))]
-    {
-        shell_words::split(cmd).unwrap_or_else(|_| vec![])
+        },
+        Err(SecurityError::PathTraversal { .. }) => PolicyDecision::Deny {
+            reason_code: "PATH_DENY".to_string(),
+            message: "Path escapes workspace root.".to_string(),
+            remediation: "Use a path inside the configured workspace.".to_string(),
+        },
+        Err(err) => PolicyDecision::Deny {
+            reason_code: "TOKENIZE_FAILED".to_string(),
+            message: format!("Command parsing failed: {err}"),
+            remediation: "Use a simple command format without shell metacharacters.".to_string(),
+        },
     }
 }
 
-fn has_disallowed_operators(cmd: &str) -> bool {
-    let banned = ["&&", "||", ";", "|", ">", "<", "`", "$("];
-    banned.iter().any(|op| cmd.contains(op))
-}
-
-fn matches_sensitive_exfiltration(cmd: &str) -> bool {
-    let lower = cmd.to_lowercase();
-    let patterns = [
-        r"/etc/shadow",
-        r"id_rsa",
-        r"\.ssh",
-        r"aws_secret_access_key",
-        r"printenv",
-        r"\benv\b",
-    ];
-
-    patterns.iter().any(|pat| {
-        Regex::new(pat)
-            .map(|re| re.is_match(&lower))
-            .unwrap_or(false)
-    })
-}
-
-fn is_destructive_command(first: &str, tokens: &[String]) -> bool {
-    let first_lower = first.to_lowercase();
-    if matches!(
-        first_lower.as_str(),
-        "dd" | "mkfs" | "fdisk" | "shutdown" | "reboot" | "systemctl"
-    ) {
-        return true;
+fn block_metacharacters(input: &str) -> Result<(), SecurityError> {
+    for ch in input.chars() {
+        if SHELL_METACHARACTERS.contains(&ch) {
+            return Err(SecurityError::MetacharacterBlocked(ch.to_string()));
+        }
     }
 
-    if first_lower == "rm" {
-        let joined = tokens.join(" ").to_lowercase();
-        return joined.contains("-rf") || joined.contains("-fr") || joined.contains(" / ");
+    Ok(())
+}
+
+fn sanitize_arg(
+    sanitizer: &Sanitizer<ShellArg>,
+    value: &str,
+) -> Result<Sanitized<ShellArg>, SecurityError> {
+    sanitizer
+        .sanitize(value)
+        .map_err(|err: SanitizeError| SecurityError::Sanitization(err.to_string()))
+}
+
+fn looks_like_path(value: &str) -> bool {
+    if value.is_empty() || value.starts_with('-') {
+        return false;
     }
 
-    false
+    value.starts_with('.')
+        || value.starts_with('/')
+        || value.contains('/')
+        || value.contains(std::path::MAIN_SEPARATOR)
+        || value.ends_with(".rs")
+        || value.ends_with(".toml")
+        || value.ends_with(".md")
 }
 
-fn is_allowlisted_command(first: &str) -> bool {
-    matches!(
-        first.to_lowercase().as_str(),
-        "ls" | "cat"
-            | "pwd"
-            | "echo"
-            | "git"
-            | "rg"
-            | "cargo"
-            | "npm"
-            | "node"
-            | "python"
-            | "pytest"
-            | "sed"
-            | "awk"
-            | "head"
-            | "tail"
-            | "wc"
-            | "find"
-    )
-}
+fn is_medium_risk_command(tokens: &[String]) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
 
-fn is_medium_risk_command(first: &str, tokens: &[String]) -> bool {
     let first_lower = first.to_lowercase();
     if first_lower == "git" {
         return tokens
@@ -277,13 +365,24 @@ fn is_prompt_injection_pattern(args: &Value) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn ctx(tier: PermissionTier) -> PolicyContext {
         PolicyContext {
             permission_tier: tier,
             exec_mode: "agentic".to_string(),
-            workspace_root: PathBuf::from("."),
+            workspace_root: workspace_root(),
         }
+    }
+
+    fn workspace_root() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("helix-policy-{unique}"));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        root
     }
 
     mod risk {
@@ -291,11 +390,11 @@ mod tests {
 
         #[test]
         fn safe_command_allowed() {
-            let decision = evaluate_command_risk(
-                &json!({"command": "git status"}),
-                &ctx(PermissionTier::FullExec),
-            );
-            assert_eq!(decision, PolicyDecision::Allow);
+            let workspace = workspace_root();
+            std::fs::write(workspace.join("Cargo.toml"), "workspace = true").unwrap();
+
+            let tokens = validate_command("git status", &workspace).unwrap();
+            assert_eq!(tokens, vec!["git".to_string(), "status".to_string()]);
         }
 
         #[test]
@@ -342,6 +441,32 @@ mod tests {
             assert!(
                 matches!(decision, PolicyDecision::Deny { reason_code, .. } if reason_code == "TIER_DENY")
             );
+        }
+
+        #[test]
+        fn path_tokens_are_canonicalized_inside_workspace() {
+            let workspace = workspace_root();
+            std::fs::write(workspace.join("src/lib.rs"), "pub fn main() {}").unwrap();
+
+            let tokens =
+                validate_command("cat ./src/../src/lib.rs", &workspace).expect("normalized path");
+
+            assert_eq!(tokens[0], "cat");
+            assert_eq!(tokens[1], workspace.join("src/lib.rs").display().to_string());
+        }
+
+        #[test]
+        fn traversal_outside_workspace_is_rejected() {
+            let workspace = workspace_root();
+            let error = validate_command("cat ../outside.txt", &workspace).unwrap_err();
+            assert!(matches!(error, SecurityError::PathTraversal { .. }));
+        }
+
+        #[test]
+        fn dangerous_commands_are_rejected() {
+            let workspace = workspace_root();
+            let error = validate_command("rm -rf ./src", &workspace).unwrap_err();
+            assert!(matches!(error, SecurityError::DangerousCommand(_)));
         }
     }
 }
