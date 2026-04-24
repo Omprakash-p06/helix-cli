@@ -1,262 +1,66 @@
-# Roadmap
+# Helix OS Agent Roadmap
 
-## [x] Phase 1: Boot Upgrades & Mode Selection
-**Goal:** Enhance the single-command launcher (`start.py`) to provide the necessary UX prompts for UI and Agentic mode selection, and strip existing personality configurations.
-*   **Requirements:** REQ-04, REQ-05, REQ-09, REQ-10
-*   **Success Metrics:** Executing `start.py` visibly pauses for user input, successfully captures variables for Web/Terminal and Agentic/Chat modes, and passes these variables gracefully into the Rust orchestrator environment. The system prompt natively forbids greetings.
+## Global Process Standards
 
-## [x] Phase 2: Rich Terminal Upgrades
-**Goal:** Replace the naive standard input loop in `agent-rs/src/main.rs` with a robust text-area handling crate.
-*   **Requirements:** REQ-07
-*   **Success Metrics:** A user can copy a 50-line code snippet, paste it into the Rust terminal prompt, and naturally submit the entire block without the terminal fracturing the input lines or dropping characters.
+### Recording & Reporting
+1. **Atomic Commits:** Perform a `git commit` immediately once all tests pass following the completion of a phase.
+2. **Quality Enforcement:** Run full code quality tests (`cargo clippy`, `cargo test`) every time a `/gsd-debug` session or a roadmap phase is completed.
+3. **Architectural Visualization:** Update `misc/architecture_[YYYY-MM-DD].svg` upon completion of each phase or successful debug fix.
 
-## [x] Phase 3: Grammar-Enforced Tool Calling
-**Goal:** Ensure 100% JSON schema compliance natively at the token generation layer for local models.
-*   **Requirements:** REQ-06
-*   **Success Metrics:** The Rust orchestrator automatically converts `tools::ToolCallArgs` into a valid GBNF grammar string and successfully passes it as an enforced constraint to the `llama-server` `/v1/chat/completions` API endpoint during agentic turns. Hallucinated schemas drop to zero.
+### Preventative Controls & CI/CD
+4. **Release Versioning:** Follow **Conventional Commits** (`feat:`, `fix:`, `BREAKING CHANGE:`) to enable automated semantic versioning.
+5. **Branching Strategy:** Use **Trunk-Based Development** with short-lived feature branches and mandatory CI gates before merging to `main`.
+6. **Quality Gates:** Enforce a minimum **80% test coverage** floor and treat all `clippy` warnings as errors in CI.
+7. **Scheduled Validation:** Execute a full nightly CI pipeline to detect regressions or flakiness in the `main` branch.
+8. **Supply Chain Security:** Use `cargo deny` or `cargo audit` in CI to block dependencies with known vulnerabilities or unapproved licenses.
+9. **Automated Documentation:** Build and deploy `cargo doc` and `mdBook` documentation automatically on every push to `main`.
+10. **Artifact Integrity:** Cryptographically sign all binary release artifacts to ensure supply chain security.
 
-## [x] Phase 4: KoboldCPP Fallback Accuracy
-**Goal:** Ensure the fallback inference backend achieves the same exact tool-calling accuracy.
-*   **Requirements:** REQ-06
-*   **Success Metrics:** If the system is booted using `koboldcpp`, the engine is correctly invoked with accurate structural formatting (or API-compatible grammar equivalents) mimicking Phase 3's reliability.
+This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI OS troubleshooting agent, powered by Qwen 3.6 and orchestrated by GSD 2.0.
 
-## [x] Phase 5: Modern Web Frontend
-**Goal:** Build the alternative "Web Interface" option requested during the boot sequence.
-*   **Requirements:** REQ-08
-*   **Success Metrics:** A standalone web application (React/Vue/Svelte) can boot simultaneously, connect to the local server, display streaming tool executions, and handle user chat seamlessly.
+## [ ] Phase 01: Foundation & Security Sandbox
+**Goal:** Establish the core model foundation and the non-negotiable security isolation layer.
+**Plans:** 3 plans
+**Requirements:** [MOD-01, SEC-01, SEC-02, SEC-03]
+**Plans:**
+- [ ] 01-01-PLAN-foundation-and-qwen.md — Establish Qwen 3.6 foundation and verification tools.
+- [ ] 01-02-PLAN-sandbox-and-policy.md — Implement Docker isolation and command policy engine.
+- [ ] 01-03-PLAN-audit-and-integration.md — Wire audit logging and unify execution path.
 
-### [x] Phase 9: Fix terminal chat warning and optimize system prompt
-**Goal:** Remove `unused_mut` compiler warning and suppress the default terminal chat system prompt to optimize Time-To-First-Token.
-**Requirements**: UX-03 (Performance Harmonization)
-**Depends on:** Phase 8
-**Plans:** 1/1 plans complete
+**Success Metrics:** All commands execute inside an isolated container; forbidden commands are blocked before execution; full audit trail persists.
 
-Plans:
-- [x] 01-PLAN.md: Fix warning and optimize prompt push.
+## [ ] Phase 02: OS Diagnostics & Read-Only Troubleshooting
+**Goal:** Enable the agent to safely inspect system state and diagnose issues without making changes.
+*   **Tasks:**
+    *   Implement cross-platform log reader tools (journalctl, Event Log).
+    *   Implement system state introspection (processes, services, hardware).
+    *   Implement file system search and read tools with sandbox enforcement.
+    *   Build diagnostic reasoning loop (evidence → hypothesis → test).
+*   **Success Metrics:** Agent accurately identifies 80% of common OS issues in a read-only environment.
 
-### [x] Phase 10: Terminal UI Foundation
+## [ ] Phase 03: Guided Repair & Human-Approved Fixes
+**Goal:** Transition from diagnostics to repair with mandatory human-in-the-loop gates.
+*   **Tasks:**
+    *   Implement "Ask-for-Permission" interactive confirmation flow.
+    *   Build pre-repair rollback snapshot mechanism.
+    *   Implement basic repair workflows (restart service, fix permissions, install package).
+    *   Add confidence scoring to recommendations.
+*   **Success Metrics:** 0% unexpected system modifications; agent never executes a fix without explicit user approval.
 
-**Goal:** Implement foundational TUI using ratatui, crossterm, and tokio with input handling, chat rendering, ghost autocomplete, and status bar.
-**Requirements**: TBD
-**Depends on:** Phase 9
-**Plans:** 1/1 plans complete
+## [ ] Phase 04: GSD 2.0 Integration & Autonomous Workflows
+**Goal:** Integrate the GSD 2.0 orchestration layer for complex, multi-step repairs.
+*   **Tasks:**
+    *   Integrate GSD 2.0 Pi SDK as the primary orchestration state machine.
+    *   Implement `/gsd plan` and `/gsd execute` for multi-phase troubleshooting.
+    *   Implement autonomous error recovery (RETRY/DECOMPOSE/PRUNE).
+    *   Implement loop detection and state tracking.
+*   **Success Metrics:** Agent successfully navigates 5+ step repair workflows with automatic recovery from mid-step failures.
 
-Plans:
-- [x] 01-PLAN.md: Ratatui foundation, input layer, multiline, command preview.
-
-### Phase 11: Output Polish and Streaming
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 10
-**Plans:** 1/1 plans complete
-
-Plans:
-- [x] TBD (run /gsd-plan-phase 11 to break down) (completed 2026-03-29)
-
-### Phase 12: Control and Feedback
-
-**Goal:** Mid-stream generation interrupts (Ctrl+C), chat history scrolling (PageUp/Down), and live TTFT tracking in the TUI.
-**Requirements**: UX-01, UX-02, PERF-02
-**Depends on:** Phase 11
-**Plans:** 0/1 plans complete
-
-Plans:
-- [x] 12-01-PLAN.md: Interactive Controls and Telemetry
-
-### Phase 13: Context and Discoverability
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 12
-**Plans:** 0/0 plans complete
-
-Plans:
-- [x] TBD (run /gsd-plan-phase 13 to break down) (completed 2026-03-29)
-
-### Phase 14: Fix TUI Missing Output Bug
-
-**Goal:** Restore reliable TUI output by fixing streamed SSE parsing and token-to-UI rendering flow.
-**Requirements**: UX-01, TEST-01
-**Depends on:** Phase 13
-**Plans:** 2/2 plans complete complete
-
-Plans:
-- [x] 14-01-PLAN.md — Repair streaming parser and token rendering pipeline with regression tests. (completed 2026-03-29)
-- [x] 14-02-PLAN.md — Close UAT gaps for stuck/blank live streaming visibility, tool-phase feedback, and interrupt flush safety. (completed 2026-03-29)
-
-### [x] Phase 15: Chat Mode Polish Foundation
-
-**Goal:** Implement strict system prompt isolation for chat mode and strip internal reasoning traces from user-visible output.
-**Requirements**: CHAT-01, CHAT-02, CHAT-03, CHAT-04
-**Depends on:** Phase 14
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 15-01-PLAN.md: Chat mode system prompt and reasoning filter (completed 2026-03-31)
-- [x] 15-02-PLAN.md: Output deduplication and quote normalization (completed 2026-03-31)
-
-### Phase 16: Live Streaming & Immediate Rendering
-
-**Goal:** Refactor SSE streaming from line-buffered to byte-level reads; eliminate accumulation delays; ensure immediate token rendering.
-**Requirements**: STREAM-01, STREAM-02, STREAM-03, STREAM-04, STREAM-05
-**Depends on:** Phase 15
-**Plans:** 0/2 plans
-
-Plans:
-- [ ] 16-01-PLAN.md: Byte-level SSE parsing and immediate render
-- [ ] 16-02-PLAN.md: Terminal and TUI reactivity, interrupt safety
-
-### Phase 17: Non-Blocking Tool Execution
-
-**Goal:** Implement async tool spawning, concurrent execution, and status feedback without blocking the orchestrator loop.
-**Requirements**: TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05
-**Depends on:** Phase 16
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 17-01-PLAN.md: Async task spawning and tool status UI
-- [x] 17-02-PLAN.md: Parallel execution, result ordering, and timeouts
-
-### Phase 18: Production Quality & Codebase Consolidation
-
-**Goal:** Extract shared types into `agent_core` crate, achieve clippy-clean status, integrate structured tracing, and build comprehensive test suite.
-**Requirements**: CODE-01, CODE-02, CODE-03, CODE-04
-**Depends on:** Phase 17
-**Plans:** 0/1 plans
-
-Plans:
-- [ ] 18-01-PLAN.md: Types refactor, code cleanup, tracing, and tests
-
-### [x] Phase 19: TUI redesign
-
-**Goal:** Redesign TUI with three-panel layout, command palette, themes, ghost autocomplete, and token counter.
-**Requirements**: TBD
-**Depends on:** Phase 18
-**Plans:** 2/2 plans
-
-Plans:
-- [x] 19-01-PLAN.md — API contract, state management, three-panel layout foundation
-- [x] 19-02-PLAN.md — Command palette and theme system
-
-### Phase 19: Implement Terminal UI features
-
-**Goal:** Replace the placeholder TUI shell with the full Phase 19 terminal experience: configurable layout, advanced input and command palette, rich conversation/sidebar rendering, theme support, and responsive terminal feedback.
-**Requirements**: TUI-01, TUI-02, TUI-03, TUI-04, TUI-05
-**Depends on:** Phase 18
-**Plans:** 1/4 plans executed
-
-Plans:
-- [x] 19-01-PLAN.md — Shared launch contract, layout flag parsing, and three-region TUI shell.
-- [ ] 19-02-PLAN.md — Slash command palette, multiline input HUD, external editor, and theme/config loading.
-- [ ] 19-03-PLAN.md — Rich conversation rendering, sidebar telemetry, preview overlays, and scroll-safe new-message behavior.
-- [ ] 19-04-PLAN.md — Typing/tool progress polish, interrupt/quit UX, regression tests, and clippy-clean validation.
-
----
-
-## [x] Phase 6: Memory Management & Fallback
-**Goal:** Optimize hardware resource utilization by aggressively clearing VRAM and implementing iGPU fallback.
-*   **Requirements:** PERF-01, PERF-03
-*   **Success Metrics:** 
-    1. `start.py` detects and kills orphan `llama-server` or `koboldcpp` processes before launch.
-    2. Fallback logic automatically routes model loading to the iGPU if dGPU VRAM allocation fails.
-
-## [x] Phase 7: Generation Speed & Thought UI
-**Goal:** Maximize TTFT (Time-To-First-Token) and expose agent reasoning visually to the user.
-*   **Requirements:** PERF-02, UX-01
-*   **Success Metrics:**
-    1. Inference configurations are tuned for maximum tokens/sec.
-    2. Internal `<think>` tags are preserved and beautifully rendered as `<thinking>` blocks in both Terminal and Web UI.
-
-## [x] Phase 8: Terminal Input UX & Testing
-**Goal:** Overhaul the terminal submission experience and build the automated tool-accuracy evaluation script.
-*   **Requirements:** UX-02, TEST-01
-*   **Success Metrics:**
-    1. Terminal handles multi-line paste intuitively, submitting on standard Enter or Ctrl+D without requiring double-enter.
-    2. A dedicated test script programmatically validates tool-call structural accuracy against backend models.
-
-### Phase 20: Security Execution Guardrails
-**Goal:** Close critical tool-execution risk by enforcing policy-tiered command execution, hardened argument validation, and prompt-injection refusal gating.
-**Requirements**: SEC-01, SEC-02, SEC-03
-**Depends on:** Phase 19
-**Gap Closure:** Confirms and closes vulnerabilities from misc/vulnerabilities.md sections 1.1-1.3.
-**Plans:** 0/3 plans complete
-
-Plans:
-- [ ] 20-01-PLAN.md — Security policy contracts and permission-tier config bridge.
-- [ ] 20-02-PLAN.md — Command validation, risk scoring, and prompt-injection refusal gate.
-- [ ] 20-03-PLAN.md — Runtime integration across terminal/web paths with guardrail tests.
-
-### Phase 21: Model Integrity and Install Automation
-**Goal:** Deliver trusted model supply chain checks and a one-command hardware-aware installer workflow.
-**Requirements**: SEC-04, SETUP-01
-**Depends on:** Phase 20
-**Gap Closure:** Closes vulnerability 1.4 and market need for zero-friction model setup.
-**Plans:** 0/1 plans complete
-
-Plans:
-- [ ] 21-01-PLAN.md — Trusted manifest, checksum gate, and install entrypoint wiring.
-
-### Phase 22: Onboarding and Session Resilience
-**Goal:** Reduce learning friction with guided onboarding and implement crash-safe session persistence with resume.
-**Requirements**: SETUP-02, SESSION-01, SESSION-02
-**Depends on:** Phase 19
-**Gap Closure:** Closes vulnerabilities 2.2 and 2.4 and aligns with market expectations for professional UX.
-**Plans:** 1/1 plans complete
-
-Plans:
-- [x] 22-01-PLAN.md — Onboarding profile, crash-safe autosave/resume, and slash lifecycle commands. (completed 2026-04-13)
-
-### [x] Phase 23: CPU TTFT and Runtime Watchdog
-**Goal:** Improve perceived and sustained performance on modest hardware using CPU-aware runtime tuning and server health watchdog recovery.
-*   **Requirements**: PERF-04, PERF-05
-*   **Success Metrics:**
-    1. Runtime applies deterministic CPU-aware profile settings that prioritize TTFT on modest hardware.
-    2. Health failures trigger bounded, stateful recovery with cooldown lockout and clear diagnostics.
-
-### [x] Phase 24: Enterprise Audit Log MVP
-**Goal:** Add structured, queryable audit logging for tool invocations and security decisions to support enterprise trust requirements.
-*   **Requirements**: ENT-01
-*   **Success Metrics:**
-    1. Every policy decision and tool outcome is persisted in a tamper-evident hash-chained SQLite store.
-    2. Audit logs are queryable via CLI across terminal and web paths with schema parity.
-
-### [x] Phase 25: Plugin SDK and IDE Bridge Foundation
-**Goal:** Establish extensibility and IDE adoption foundations through a plugin SDK contract and local IDE integration bridge.
-*   **Requirements**: ENT-02, IDE-01
-*   **Success Metrics:**
-    1. Hardcoded match blocks removed in favor of a dynamic `ToolRegistry` system.
-    2. IDE-compatible status, tool discovery, and context endpoints active in web mode.
-### [x] Phase 26: Open-Source Integration & Refinement
-**Goal:** Accelerate development by integrating patterns from high-quality open-source references for streaming, parallel tool execution, and rich TUI widgets.
-*   **Requirements**: UX-01, STREAM-01, TOOL-01, CODE-01
-*   **Success Metrics:**
-    1. Byte-level immediate token rendering in TUI (no buffering).
-    2. Tool timeline widget with stable status and collapsible output.
-    3. Unified tool runtime architecture shared across all execution paths.
-
-- [x] 26-01-PLAN.md - Byte-level streaming and rich TUI timeline refinement.
-- [x] 26-02-PLAN.md - Shared async tool runtime contracts and cross-surface consolidation.
-
-### Phase 27: TUI Animations & Settings Panel
-
-**Goal:** Add polished animations (spinner, fade effects, progress gauge) and a settings modal for user configuration.
-**Requirements**: TUI-06, TUI-07, TUI-08, TUI-09, TUI-10
-**Depends on:** Phase 26
-**Gap Closure:** Adds user-requested TUI polish features
-**Plans:** 2 plans
-
-Plans:
-- [ ] 27-01-PLAN.md — TUI Animations & Event Loop Upgrade
-- [ ] 27-02-PLAN.md — Settings Modal & User Configuration
-
-### Phase 28: GSD Workflow Integration
-
-**Goal:** Integrate GSD (Get Shit Done) commands for structured project management.
-**Requirements**: TBD
-**Depends on:** Phase 27
-**Gap Closure:** Adds GSD protocol commands
-**Plans:** 0/1 plans
-
-Plans:
-- [ ] 28-01-PLAN.md — GSD adapter, commands, phase planning
+## [ ] Phase 05: Autonomous "Fix It" Mode & Multi-agent Voting
+**Goal:** Enable high-trust autonomous operations for routine maintenance and repair.
+*   **Tasks:**
+    *   Implement user-configurable trust levels (Safe Mode vs. Auto Mode).
+    *   Build Guardian multi-agent voting for high-risk action consensus.
+    *   Implement blocklist for irreversible/unrecoverable actions.
+    *   Final production hardening and TUI polish for autonomous status.
+*   **Success Metrics:** 95% diagnostic accuracy; 0% catastrophic failures in 1000+ test runs.
