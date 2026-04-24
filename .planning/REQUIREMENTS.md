@@ -5,18 +5,18 @@ Deliver a local-first, autonomous AI OS troubleshooting agent that can safely di
 
 ---
 
-## [Phase 01] Foundation & Security Sandbox (Active)
+## [Phase 01] Foundation & Security Sandbox (Completed)
 
-### [x] SEC-01: Execution Sandboxing
+### ✓ SEC-01: Execution Sandboxing
 The system must run all agent-initiated commands and scripts inside an isolated environment (Docker container or MicroVM). Host filesystem access must be explicitly mapped and restricted.
 
-### [x] SEC-02: Command Policy Engine
+### ✓ SEC-02: Command Policy Engine
 A canonicalization engine must normalize all commands before evaluation against a strict allowlist. Any command containing shell metacharacters (`|`, `;`, `&`, etc.) that are not explicitly permitted in the allowlist must be blocked.
 
-### SEC-03: Immutable Audit Logging
+### ✓ SEC-03: Immutable Audit Logging
 Every action (command, reasoning, outcome, timestamp) must be recorded in an append-only, tamper-evident log stored outside the agent's writeable sandbox.
 
-### [x] MOD-01: Qwen 3.6 Tiered Integration
+### ✓ MOD-01: Qwen 3.6 Tiered Integration
 Native support for Qwen 3.6 series (27B and 35B MoE) with hardware-aware quantization selection to ensure agentic performance on consumer GPUs (8GB-24GB VRAM).
 
 ---

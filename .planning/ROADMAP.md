@@ -18,14 +18,14 @@
 
 This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI OS troubleshooting agent, powered by Qwen 3.6 and orchestrated by GSD 2.0.
 
-## [ ] Phase 01: Foundation & Security Sandbox
+## [x] Phase 01: Foundation & Security Sandbox
 **Goal:** Establish the core model foundation and the non-negotiable security isolation layer.
 **Plans:** 3 plans
 **Requirements:** [MOD-01, SEC-01, SEC-02, SEC-03]
 **Plans:**
 - [x] 01-01-PLAN-foundation-and-qwen.md — Establish Qwen 3.6 foundation and verification tools.
 - [x] 01-02-PLAN-sandbox-and-policy.md — Implement Docker isolation and command policy engine.
-- [ ] 01-03-PLAN-audit-and-integration.md — Wire audit logging and unify execution path.
+- [x] 01-03-PLAN-audit-and-integration.md — Wire audit logging and unify execution path.
 
 **Success Metrics:** All commands execute inside an isolated container; forbidden commands are blocked before execution; full audit trail persists.
 
