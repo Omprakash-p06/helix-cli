@@ -48,7 +48,7 @@ Output: Updated configuration and installation scripts, and a new system verific
   <files>scripts/config.py</files>
   <action>
     Modify `scripts/config.py` to:
-    - Update `MODEL_NAME` to "Qwen-3.6-27B-MoE" (or similar SOTA variant found in GGUF).
+    - Update `MODEL_NAME` to "Qwen-3.6-27B-MoE".
     - Update `AVAILABLE_MODELS` to include Qwen 3.6 variants (27B and 35B MoE).
     - Implement tiered hardware detection logic for `GPU_LAYERS` based on VRAM (e.g., 8GB -> Q4_K_M, 24GB -> Q8_0 or full).
     - Set `CHAT_SYSTEM_PROMPT` and `AGENTIC_SYSTEM_PROMPT` to align with Qwen 3.6 capabilities (per RESEARCH.md).
@@ -64,14 +64,14 @@ Output: Updated configuration and installation scripts, and a new system verific
   <files>scripts/model_install.py</files>
   <action>
     Update `TRUSTED_MODELS` registry in `scripts/model_install.py` to include:
-    - `qwen-3.6-27b-moe`: Repo "Qwen/Qwen2.5-27B-Instruct-GGUF" (use 3.6 if available, otherwise 2.5 as baseline but label 3.6-ready).
-    - `qwen-3.6-35b-moe`: Repo "Qwen/Qwen2.5-35B-Instruct-GGUF".
-    Note: Research mentioned Qwen 3.6; if not publicly available in GGUF format yet, use Qwen 2.5 SOTA variants as the "3.6 foundation" per user request (MOD-01).
+    - `qwen-3.6-27b-moe`: Repo "Qwen/Qwen3.6-27B-Instruct-GGUF".
+    - `qwen-3.6-35b-moe`: Repo "Qwen/Qwen3.6-35B-Instruct-GGUF".
+    Note: Per feedback, use actual Qwen 3.6 GGUF repositories as identified in research. Do NOT use Qwen 2.5.
   </action>
   <verify>
     <automated>python3 scripts/model_install.py --list-models | grep "qwen-3.6"</automated>
   </verify>
-  <done>Registry contains pinned Qwen 3.6/2.5 SOTA models.</done>
+  <done>Registry contains pinned Qwen 3.6 SOTA models.</done>
 </task>
 
 <task type="auto">

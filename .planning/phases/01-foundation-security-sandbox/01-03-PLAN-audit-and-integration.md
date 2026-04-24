@@ -4,7 +4,7 @@ plan: 03
 type: execute
 wave: 2
 depends_on: [01-02]
-files_modified: [agent-rs/src/agent_core/tool_runtime.rs, agent-rs/src/lib.rs, agent-rs/src/main.rs, agent-rs/src/security/mod.rs]
+files_modified: [agent-rs/src/agent_core/tool_runtime.rs, agent-rs/src/lib.rs, agent-rs/src/main.rs, agent-rs/src/security/mod.rs, misc/architecture_*.svg]
 autonomous: true
 requirements: [SEC-03, SEC-01]
 
@@ -13,9 +13,12 @@ must_haves:
     - "Every command execution is recorded in the audit log"
     - "Audit log contains tamper-evident hash chain"
     - "Failed policy checks are also logged"
+    - "Codebase passes all quality gates (clippy, test)"
   artifacts:
     - path: "agent-rs/src/agent_core/tool_runtime.rs"
       provides: "Unified secure execution entry point"
+    - path: "misc/architecture_*.svg"
+      provides: "Visual system representation"
   key_links:
     - from: "agent_core/tool_runtime.rs"
       to: "security/policy.rs"
@@ -29,10 +32,10 @@ must_haves:
 ---
 
 <objective>
-Wire the immutable audit log and unify the security modules into a production tool runtime.
+Wire the immutable audit log, unify the security modules into a production tool runtime, and perform phase cleanup.
 
-Purpose: Ensure total auditability and enforce the security sandbox for all tool calls.
-Output: Integrated tool runtime and updated agent entry points.
+Purpose: Ensure total auditability and enforce the security sandbox for all tool calls while maintaining global process standards.
+Output: Integrated tool runtime, updated agent entry points, and updated architectural documentation.
 </objective>
 
 <execution_context>
@@ -46,6 +49,7 @@ Output: Integrated tool runtime and updated agent entry points.
 @agent-rs/src/security/audit.rs
 @agent-rs/src/security/policy.rs
 @agent-rs/src/security/sandbox.rs
+@.planning/ROADMAP.md
 </context>
 
 <tasks>
@@ -98,6 +102,21 @@ Output: Integrated tool runtime and updated agent entry points.
   <done>End-to-end security flow is verified with automated tests.</done>
 </task>
 
+<task type="auto">
+  <name>Phase Quality Cleanup & Visualization</name>
+  <files>misc/architecture_*.svg</files>
+  <action>
+    Perform final phase cleanup and fulfill Global Process Standards:
+    - Run `cargo clippy` and fix any warnings (Standard 2).
+    - Run full `cargo test` suite (Standard 2).
+    - Generate or update `misc/architecture_[YYYY-MM-DD].svg` to include `PolicyEngine`, `DockerSandbox`, and `AuditStore` (Standard 3).
+  </action>
+  <verify>
+    <automated>cd agent-rs && cargo clippy && cargo test && ls misc/architecture_*.svg</automated>
+  </verify>
+  <done>Phase 01 code is high-quality and system architecture is visually documented.</done>
+</task>
+
 </tasks>
 
 <threat_model>
@@ -116,6 +135,7 @@ Output: Integrated tool runtime and updated agent entry points.
 <verification>
 1. Run `cargo test --test test_secure_execution` to verify the full integrated flow.
 2. Verify `logs/audit.db` exists and contains entries.
+3. Verify architecture diagram is updated.
 </verification>
 
 <success_criteria>
@@ -123,6 +143,7 @@ Output: Integrated tool runtime and updated agent entry points.
 - Failed policy checks are logged.
 - Audit log integrity is verifiable.
 - All tool execution happens within the sandbox.
+- Standard 2 and 3 compliance achieved.
 </success_criteria>
 
 <output>
