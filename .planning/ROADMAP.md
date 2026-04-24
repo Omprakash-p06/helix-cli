@@ -31,12 +31,14 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 
 ## [ ] Phase 02: OS Diagnostics & Read-Only Troubleshooting
 **Goal:** Enable the agent to safely inspect system state and diagnose issues without making changes.
-*   **Tasks:**
-    *   Implement cross-platform log reader tools (journalctl, Event Log).
-    *   Implement system state introspection (processes, services, hardware).
-    *   Implement file system search and read tools with sandbox enforcement.
-    *   Build diagnostic reasoning loop (evidence → hypothesis → test).
-*   **Success Metrics:** Agent accurately identifies 80% of common OS issues in a read-only environment.
+**Plans:** 3 plans
+**Requirements:** [DIAG-01, DIAG-02, DIAG-03, SEC-02]
+**Plans:**
+- [ ] 02-01-PLAN.md — Implement cross-platform log retrieval (journalctl, evtx).
+- [ ] 02-02-PLAN.md — Implement system introspection (sysinfo) and file search tools.
+- [ ] 02-03-PLAN.md — Implement Diagnostic Reasoning Loop (Observe -> Hypothesize -> Test).
+
+**Success Metrics:** Agent accurately identifies 80% of common OS issues in a read-only environment.
 
 ## [ ] Phase 03: Guided Repair & Human-Approved Fixes
 **Goal:** Transition from diagnostics to repair with mandatory human-in-the-loop gates.
