@@ -1,102 +1,114 @@
 #!/usr/bin/env python3
-import os
+import argparse
 import hashlib
+import os
 import shutil
+import sys
 from pathlib import Path
-from typing import Dict, Optional, Any, List
+from typing import Any, Dict, Optional
 
-# Trusted model registry with pinned revisions and checksums.
-# In a real-world scenario, these SHA256 values would be hardcoded after verification.
-# For this implementation, we include the canonical defaults.
+
 TRUSTED_MODELS: Dict[str, Dict[str, Any]] = {
-    "gpt-oss-20b": {
-        "name": "GPT-OSS-20B",
-        "repo": "DavidAU/OpenAi-GPT-oss-20b-abliterated-uncensored-NEO-Imatrix-gguf",
-        "filename": "gpt-oss-20b-IQ4_NL.gguf",
-        "revision": "main",
-        # Placeholder SHA256 - in production this would be the actual GGUF hash
-        "sha256": "4b9e8d8f7a6c5b4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d", 
+    "qwen-3.6-27b-moe": {
+        "name": "Qwen-3.6-27B-MoE",
+        "repo": "Qwen/Qwen3.6-27B-Instruct-GGUF",
+        "filename": "Qwen3.6-27B-Instruct-Q4_K_M.gguf",
+        "quantizations": ["Q4_K_M", "Q5_K_M", "Q8_0"],
+        "revision": "UNVERIFIED_REVISION",
+        "sha256": None,
+        "verification_status": "blocked-until-pinned",
     },
-    "qwen-9b": {
-        "name": "Qwen3.5-9B-Uncensored",
-        "repo": "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive",
-        "filename": "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
-        "revision": "main",
-        # Placeholder SHA256
-        "sha256": "5c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
-    }
+    "qwen-3.6-35b-moe": {
+        "name": "Qwen-3.6-35B-MoE",
+        "repo": "Qwen/Qwen3.6-35B-Instruct-GGUF",
+        "filename": "Qwen3.6-35B-Instruct-Q4_K_M.gguf",
+        "quantizations": ["Q4_K_M", "Q5_K_M", "Q8_0"],
+        "revision": "UNVERIFIED_REVISION",
+        "sha256": None,
+        "verification_status": "blocked-until-pinned",
+    },
 }
 
 PROJECT_DIR = Path(__file__).parent.parent.absolute()
 MODELS_DIR = PROJECT_DIR / "models"
 STAGING_DIR = MODELS_DIR / ".staging"
 
+
 def resolve_model_ref(model_ref: str) -> Optional[Dict[str, Any]]:
-    """Resolves a model alias or repo ID to a trusted model spec."""
     model_ref = model_ref.lower()
     if model_ref in TRUSTED_MODELS:
         return TRUSTED_MODELS[model_ref]
-    
-    # Also check by repo name
+
     for spec in TRUSTED_MODELS.values():
-        if spec["repo"].lower() == model_ref:
+        if spec["repo"].lower() == model_ref or spec["name"].lower() == model_ref:
             return spec
-            
+
     return None
 
+
 def verify_model_integrity(file_path: Path, expected_sha256: str) -> bool:
-    """Computes SHA256 of the file and compares it with the expected value."""
     if not file_path.exists():
         return False
-    
+
     sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        # Read in 1MB chunks
-        for byte_block in iter(lambda: f.read(1024 * 1024), b""):
+    with open(file_path, "rb") as handle:
+        for byte_block in iter(lambda: handle.read(1024 * 1024), b""):
             sha256_hash.update(byte_block)
-    
-    actual_sha256 = sha256_hash.hexdigest()
-    return actual_sha256 == expected_sha256
+
+    return sha256_hash.hexdigest() == expected_sha256
+
+
+def validate_trusted_model_spec(model_spec: Dict[str, Any]) -> None:
+    revision = model_spec.get("revision")
+    sha256 = model_spec.get("sha256")
+    if not revision or revision == "main" or revision == "UNVERIFIED_REVISION":
+        raise ValueError(
+            f"{model_spec['name']} is blocked: pin a concrete Hugging Face revision before installation."
+        )
+    if not isinstance(sha256, str) or len(sha256) != 64:
+        raise ValueError(
+            f"{model_spec['name']} is blocked: add a verified 64-character SHA256 before installation."
+        )
+
 
 def download_model_to_staging(model_spec: Dict[str, Any], use_hf_hub: bool = True) -> Path:
-    """Downloads the model to a staging area."""
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
     dest_path = STAGING_DIR / model_spec["filename"]
-    
+
     repo_id = model_spec["repo"]
     filename = model_spec["filename"]
-    revision = model_spec.get("revision", "main")
+    revision = model_spec["revision"]
 
     if use_hf_hub:
         try:
             from huggingface_hub import hf_hub_download
-            print(f"  Downloading {filename} from {repo_id} using huggingface_hub...")
+
+            print(f"  Downloading {filename} from {repo_id} @ {revision} using huggingface_hub...")
             downloaded_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
                 revision=revision,
                 local_dir=STAGING_DIR,
-                local_dir_use_symlinks=False
+                local_dir_use_symlinks=False,
             )
             return Path(downloaded_path)
         except ImportError:
             print("  huggingface_hub not installed, falling back to requests...")
-        except Exception as e:
-            print(f"  huggingface_hub download failed: {e}")
+        except Exception as exc:
+            print(f"  huggingface_hub download failed: {exc}")
             print("  Falling back to requests...")
 
-    # Fallback to requests (legacy behavior but to staging)
     import requests
     from tqdm import tqdm
-    
+
     url = f"https://huggingface.co/{repo_id}/resolve/{revision}/{filename}"
     print(f"  Downloading {filename} from {url}...")
-    
+
     response = requests.get(url, stream=True, timeout=60)
     response.raise_for_status()
     total_size = int(response.headers.get("content-length", 0))
 
-    with open(dest_path, "wb") as f, tqdm(
+    with open(dest_path, "wb") as handle, tqdm(
         desc=filename,
         total=total_size,
         unit="iB",
@@ -104,57 +116,77 @@ def download_model_to_staging(model_spec: Dict[str, Any], use_hf_hub: bool = Tru
         unit_divisor=1024,
     ) as bar:
         for data in response.iter_content(chunk_size=8192):
-            size = f.write(data)
+            size = handle.write(data)
             bar.update(size)
-            
+
     return dest_path
 
+
 def activate_model(staged_path: Path) -> Path:
-    """Moves a verified model from staging to the active models directory."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     final_path = MODELS_DIR / staged_path.name
-    
     if final_path.exists():
-        # Keep a backup if it's different? For now, just overwrite
-        pass
-        
+        final_path.unlink()
     shutil.move(str(staged_path), str(final_path))
     print(f"  Model activated: {final_path.name}")
     return final_path
 
+
 def install_model_spec(spec: Dict[str, Any]) -> bool:
-    """Resolve, download, verify, and activate a model from a spec dict."""
     print(f"Installing trusted model: {spec['name']}")
     try:
+        validate_trusted_model_spec(spec)
         staged_path = download_model_to_staging(spec)
-        
-        expected_hash = spec.get("sha256")
-        if expected_hash and not expected_hash.startswith("placeholder"):
-             if not verify_model_integrity(staged_path, expected_hash):
-                 print(f"  [!] Integrity check FAILED for {spec['filename']}")
-                 staged_path.unlink(missing_ok=True)
-                 return False
-             print("  [✓] Integrity check passed.")
-        else:
-             print("  [!] Warning: Skipping integrity check (no trusted hash provided in registry).")
-        
+        if not verify_model_integrity(staged_path, spec["sha256"]):
+            print(f"  [!] Integrity check FAILED for {spec['filename']}")
+            staged_path.unlink(missing_ok=True)
+            return False
+        print("  [✓] Integrity check passed.")
         activate_model(staged_path)
         return True
-    except Exception as e:
-        print(f"  [!] Installation failed: {e}")
+    except Exception as exc:
+        print(f"  [!] Installation failed: {exc}")
         return False
 
+
 def install_model(model_ref: str) -> bool:
-    """High-level helper to resolve, download, verify, and activate a model."""
     spec = resolve_model_ref(model_ref)
     if not spec:
         print(f"  [!] Model '{model_ref}' is not in the trusted registry.")
         return False
-    
+
     return install_model_spec(spec)
 
+
+def list_models() -> int:
+    print("Trusted Models Registry:")
+    print("-" * 72)
+    for alias, spec in TRUSTED_MODELS.items():
+        quants = ", ".join(spec.get("quantizations", []))
+        print(f"{alias:18} | {spec['name']}")
+        print(f"{'':18} | Repo: {spec['repo']}")
+        print(f"{'':18} | Revision: {spec['revision']}")
+        print(f"{'':18} | Quantizations: {quants}")
+        print(f"{'':18} | Status: {spec.get('verification_status', 'verified')}")
+        print("-" * 72)
+    return 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Install or inspect trusted Helix models.")
+    parser.add_argument("model", nargs="?", help="Model alias or repo ID to install")
+    parser.add_argument("--list-models", action="store_true", help="List trusted models and exit")
+    args = parser.parse_args(argv)
+
+    if args.list_models:
+        return list_models()
+
+    if not args.model:
+        parser.print_help()
+        return 1
+
+    return 0 if install_model(args.model) else 1
+
+
 if __name__ == "__main__":
-    # Minimal CLI for testing if run directly
-    import sys
-    if len(sys.argv) > 1:
-        install_model(sys.argv[1])
+    sys.exit(main())
