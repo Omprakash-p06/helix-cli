@@ -53,12 +53,15 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 
 ## [ ] Phase 04: GSD 2.0 Integration & Autonomous Workflows
 **Goal:** Integrate the GSD 2.0 orchestration layer for complex, multi-step repairs.
-*   **Tasks:**
-    *   Integrate GSD 2.0 Pi SDK as the primary orchestration state machine.
-    *   Implement `/gsd plan` and `/gsd execute` for multi-phase troubleshooting.
-    *   Implement autonomous error recovery (RETRY/DECOMPOSE/PRUNE).
-    *   Implement loop detection and state tracking.
-*   **Success Metrics:** Agent successfully navigates 5+ step repair workflows with automatic recovery from mid-step failures.
+**Plans:** 4 plans
+**Requirements:** [GSD-01, GSD-02, GSD-03]
+**Plans:**
+- [x] 04-01-PLAN.md — Establish core orchestration scaffold and Phase FSM.
+- [ ] 04-02-PLAN.md — Implement context reset logic and autonomous recovery operators.
+- [ ] 04-03-PLAN.md — Wire slash commands and main loop routing for GSD orchestration.
+- [ ] 04-04-PLAN.md — End-to-end integration tests and GSD 2.0 protocol validation.
+
+**Success Metrics:** Agent successfully navigates 5+ step repair workflows with automatic recovery from mid-step failures.
 
 ## [ ] Phase 05: Autonomous "Fix It" Mode & Multi-agent Voting
 **Goal:** Enable high-trust autonomous operations for routine maintenance and repair.
