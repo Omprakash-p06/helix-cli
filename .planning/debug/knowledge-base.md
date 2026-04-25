@@ -19,3 +19,10 @@ Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypothe
 - **Files changed:** agent-rs/tests/plugin_sdk_ide_bridge_validation.rs
 ---
 
+## model-install-test-failures — Model installation tests failed due to security and registry updates
+- **Date:** 2025-01-24
+- **Error patterns:** AssertionError, resolve_model_ref, install_model_spec, TRUSTED_MODELS, Qwen, revision, sha256
+- **Root cause:** Tests in `tests/test_model_install.py` were not updated after the security pivot that introduced strict revision pinning and SHA256 validation in `scripts/model_install.py`, and after the trusted model registry was updated to Qwen-only.
+- **Fix:** Updated `tests/test_model_install.py` to use `qwen-3.6-27b-moe` for resolution tests and added valid mock `revision` and 64-char `sha256` to the test model specs.
+- **Files changed:** tests/test_model_install.py
+---
