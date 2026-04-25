@@ -56,6 +56,14 @@ mod agent_core {
             }
         }
     }
+    pub mod diagnostics {
+        pub mod system {
+            include!("../src/agent_core/diagnostics/system.rs");
+        }
+        pub mod logs {
+            include!("../src/agent_core/diagnostics/logs.rs");
+        }
+    }
 }
 
 mod tools {
@@ -143,19 +151,23 @@ mod server {
                 "list_directory".to_string(),
                 "get_system_stats".to_string(),
                 "search_codebase".to_string(),
+                "list_processes".to_string(),
+                "get_service_status".to_string(),
+                "search_system_files".to_string(),
+                "get_system_logs".to_string(),
             ]);
 
             assert_eq!(names, expected);
 
             let os_assistant_payload = registry.build_tools_payload("os_assistant", true);
             let os_tools = os_assistant_payload.as_array().expect("payload array");
-            assert_eq!(os_tools.len(), 6);
+            assert_eq!(os_tools.len(), 10);
             assert!(os_tools.iter().any(|tool| tool["function"]["name"] == "run_terminal_command"));
             assert!(!os_tools.iter().any(|tool| tool["function"]["name"] == "search_codebase"));
 
             let coder_payload = registry.build_tools_payload("coder", true);
             let coder_tools = coder_payload.as_array().expect("payload array");
-            assert_eq!(coder_tools.len(), 5);
+            assert_eq!(coder_tools.len(), 9);
             assert!(!coder_tools.iter().any(|tool| tool["function"]["name"] == "run_terminal_command"));
             assert!(coder_tools.iter().any(|tool| tool["function"]["name"] == "write_file"));
         }
