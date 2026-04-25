@@ -1049,6 +1049,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             exec_mode
                         )));
                         let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+                    } else if c.starts_with("/gsd plan") {
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage("[GSD] Planning new phase...".to_string()));
+                        match agent_rs::agent_core::orchestration::advance_phase(
+                            agent_rs::agent_core::orchestration::phase_state::Phase::Plan,
+                            4,
+                            "gsd-test",
+                            "Current OS state snapshot...".to_string(),
+                            serde_json::json!({}),
+                            Some(tool_runtime.clone()),
+                            None,
+                        ).await {
+                            Ok(outcome) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                            }
+                        }
+                    } else if c == "/gsd execute" {
+                        let _ = event_tx.send(tui::TuiEvent::SystemMessage("[GSD] Executing phase...".to_string()));
+                        match agent_rs::agent_core::orchestration::advance_phase(
+                            agent_rs::agent_core::orchestration::phase_state::Phase::Execute,
+                            4,
+                            "gsd-test",
+                            "Current OS state snapshot...".to_string(),
+                            serde_json::json!({}),
+                            Some(tool_runtime.clone()),
+                            None,
+                        ).await {
+                            Ok(outcome) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                            }
+                        }
                     } else {
                         let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
                             "[Unknown command] {}",
