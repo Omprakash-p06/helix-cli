@@ -21,15 +21,15 @@ Native support for Qwen 3.6 series (27B and 35B MoE) with hardware-aware quantiz
 
 ---
 
-## [Phase 02] OS Diagnostics & Read-Only Troubleshooting
+## [Phase 02] OS Diagnostics & Read-Only Troubleshooting (Completed)
 
-### DIAG-01: Log Introspection
+### ✓ DIAG-01: Log Introspection
 Tools to safely retrieve and parse system logs (e.g., `journalctl`, `dmesg`, Windows Event Log) without risk of log injection or deletion.
 
-### DIAG-02: System State Discovery
+### ✓ DIAG-02: System State Discovery
 Tools to query processes, services, network status, and hardware health (e.g., `ps`, `systemctl status`, `ip addr`, `lscpu`).
 
-### DIAG-03: File Introspection
+### ✓ DIAG-03: File Introspection
 Sandboxed file search (`find`, `grep`) and read capabilities restricted to diagnostic-relevant paths.
 
 ---
