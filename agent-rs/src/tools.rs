@@ -99,6 +99,7 @@ pub trait Tool: Send + Sync {
         require_confirmation: bool,
         policy_context: &PolicyContext,
     ) -> ToolResult;
+    fn is_transactional(&self) -> bool { false }
 }
 
 #[derive(Default)]

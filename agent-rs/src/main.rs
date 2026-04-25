@@ -616,6 +616,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    let permission_requester: Option<Arc<dyn agent_rs::types::PermissionRequester>> = if app_config.exec_mode != "server" {
+        Some(Arc::new(agent_rs::tui::approval::InquirePermissionRequester))
+    } else {
+        None
+    };
+    let snapshot_manager = Arc::new(agent_rs::agent_core::repair::snapshots::SnapshotManager::new(".helix/backups"));
+    let safety_loop = Arc::new(agent_rs::agent_core::repair::workflow::SafetyLoop::new(snapshot_manager));
+    let tool_runtime = Arc::new(ToolRuntime::new(permission_requester, Some(safety_loop)));
+
+    let diagnostic_engine = Arc::new(tokio::sync::Mutex::new(
+        agent_rs::agent_core::diagnostics::reasoning::DiagnosticEngine::new(audit_store.clone())
+    ));
+
     /*
     println!("\n[RAG] Booting FastEmbed Semantic Knowledge Base... (this may take a moment)");
     let rag_store = rag::RagStore::new(&app_config.allowed_dir)?;
@@ -665,6 +678,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             server_flavor,
             audit_store,
             registry,
+            tool_runtime.clone(),
         )
         .await;
         return Ok(());
@@ -800,6 +814,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &runtime_profile,
                 audit_store.clone(),
                 registry.clone(),
+                diagnostic_engine.clone(),
+                tool_runtime.clone(),
             )
             .await;
             let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
@@ -835,6 +851,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &runtime_profile,
                         audit_store.clone(),
                         registry.clone(),
+                        diagnostic_engine.clone(),
+                        tool_runtime.clone(),
                     )
                     .await;
                     let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
@@ -1470,6 +1488,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             call_id: id,
                             name: func_name,
                             arguments: parsed_args,
+                            confidence: 1.0,
                         };
 
                         let dangerous = app_config.dangerous_commands.clone();
@@ -1481,10 +1500,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
                         let audit_store_owned = audit_store.clone();
                         let registry_owned = registry.clone();
+                        let tool_runtime_owned = tool_runtime.clone();
                         async move {
                             (
                                 idx,
-                                ToolRuntime::execute(
+                                tool_runtime_owned.execute(
                                     req,
                                     dangerous,
                                     require_confirm,
@@ -1576,6 +1596,8 @@ async fn run_llm_loop_tui(
     profile: &runtime_profile::RuntimeProfile,
     audit_store: Option<Arc<audit::AuditStore>>,
     registry: Arc<tools::ToolRegistry>,
+    _diagnostic_engine: Arc<tokio::sync::Mutex<agent_rs::agent_core::diagnostics::reasoning::DiagnosticEngine>>,
+    tool_runtime: Arc<ToolRuntime>,
 ) {
     let base_temperature: f64 = if server_flavor == ServerFlavor::KoboldCpp {
         0.05
@@ -2002,6 +2024,7 @@ async fn run_llm_loop_tui(
                         call_id: id,
                         name: func_name,
                         arguments: parsed_args,
+                        confidence: 1.0,
                     };
 
                     let dangerous = app_config.dangerous_commands.clone();
@@ -2028,10 +2051,12 @@ async fn run_llm_loop_tui(
                         }
                     });
 
+                    let tool_runtime_owned = tool_runtime.clone();
+
                     async move {
                         (
                             idx,
-                            ToolRuntime::execute(
+                            tool_runtime_owned.execute(
                                 req,
                                 dangerous,
                                 require_confirm,

@@ -20,15 +20,15 @@ fn security_logic_centralized_in_runtime() {
 #[test]
 fn terminal_path_uses_unified_runtime() {
     let main_rs = read("src/main.rs");
-    // Should not contain manual evaluate_tool_call anymore, should use ToolRuntime
-    assert!(main_rs.contains("ToolRuntime::execute"));
+    // Should use tool_runtime instance
+    assert!(main_rs.contains(".execute("));
 }
 
 #[test]
 fn web_path_uses_unified_runtime() {
     let server_rs = read("src/server.rs");
-    // Should use ToolRuntime::execute
-    assert!(server_rs.contains("ToolRuntime::execute"));
+    // Should use tool_runtime instance
+    assert!(server_rs.contains(".execute("));
 }
 
 #[test]

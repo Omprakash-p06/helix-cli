@@ -42,12 +42,14 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 
 ## [ ] Phase 03: Guided Repair & Human-Approved Fixes
 **Goal:** Transition from diagnostics to repair with mandatory human-in-the-loop gates.
-*   **Tasks:**
-    *   Implement "Ask-for-Permission" interactive confirmation flow.
-    *   Build pre-repair rollback snapshot mechanism.
-    *   Implement basic repair workflows (restart service, fix permissions, install package).
-    *   Add confidence scoring to recommendations.
-*   **Success Metrics:** 0% unexpected system modifications; agent never executes a fix without explicit user approval.
+**Plans:** 3 plans
+**Requirements:** [FIX-01, FIX-02, FIX-03]
+**Plans:**
+- [ ] 03-01-PLAN.md — Implement HITL permission system and snapshot management.
+- [x] 03-02-PLAN.md — Implement core repair tools (services, packages, permissions).
+- [ ] 03-03-PLAN.md — Implement transactional safety loop and Bayesian confidence scoring.
+
+**Success Metrics:** 0% unexpected system modifications; agent never executes a fix without explicit user approval.
 
 ## [ ] Phase 04: GSD 2.0 Integration & Autonomous Workflows
 **Goal:** Integrate the GSD 2.0 orchestration layer for complex, multi-step repairs.

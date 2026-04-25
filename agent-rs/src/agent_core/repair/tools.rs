@@ -28,6 +28,7 @@ impl Tool for ServiceRepairTool {
         "Manages system services (start, stop, restart). Requires human approval.".into() 
     }
     fn schema(&self) -> Value { schemars::schema_for!(ServiceRepairInput).into() }
+    fn is_transactional(&self) -> bool { true }
     fn execute(
         &self,
         args: Value,
@@ -163,6 +164,7 @@ impl Tool for PackageRepairTool {
         "Installs, removes, or updates system packages. Requires human approval.".into() 
     }
     fn schema(&self) -> Value { schemars::schema_for!(PackageRepairInput).into() }
+    fn is_transactional(&self) -> bool { true }
     fn execute(
         &self,
         args: Value,
@@ -228,6 +230,7 @@ impl Tool for PermissionRepairTool {
         "Modifies file/directory permissions or ownership. Requires human approval.".into() 
     }
     fn schema(&self) -> Value { schemars::schema_for!(PermissionRepairInput).into() }
+    fn is_transactional(&self) -> bool { true }
     fn execute(
         &self,
         args: Value,

@@ -8,6 +8,8 @@ use crate::security::policy::{PolicyContext, PolicyDecision, evaluate_tool_call}
 use crate::security::sandbox::DockerSandbox;
 use crate::tools::{ToolRegistry};
 use crate::audit::{self, AuditStore};
+use crate::types::{PermissionRequest, PermissionResponse, PermissionRequester};
+use crate::agent_core::repair::workflow::SafetyLoop;
 
 /// Structured tool result with deterministic success signal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,14 +36,26 @@ pub struct ToolRequest {
     pub call_id: String,
     pub name: String,
     pub arguments: Value,
+    pub confidence: f64,
 }
 
-pub struct ToolRuntime;
+pub struct ToolRuntime {
+    pub permission_requester: Option<Arc<dyn PermissionRequester>>,
+    pub safety_loop: Option<Arc<SafetyLoop>>,
+}
 
 impl ToolRuntime {
+    pub fn new(
+        permission_requester: Option<Arc<dyn PermissionRequester>>,
+        safety_loop: Option<Arc<SafetyLoop>>,
+    ) -> Self {
+        Self { permission_requester, safety_loop }
+    }
+
     /// Executes a single tool with standard lifecycle and audit hooks.
     /// Returns the tool result and the call ID.
     pub async fn execute(
+        &self,
         req: ToolRequest,
         dangerous_commands: Vec<String>,
         require_confirmation: bool,
@@ -63,16 +77,25 @@ impl ToolRuntime {
 
         let result = match timeout(
             Duration::from_secs(30),
-            spawn_blocking(move || {
-                Self::execute_sync(
-                    req,
-                    &dangerous_commands,
-                    require_confirmation,
-                    &policy_context,
-                    audit_store,
-                    &path,
-                    &registry,
-                )
+            spawn_blocking({
+                let self_clone = Arc::new(Self::new(self.permission_requester.clone(), self.safety_loop.clone()));
+                let req_clone = req.clone();
+                let dangerous_commands_clone = dangerous_commands.clone();
+                let policy_context_clone = policy_context.clone();
+                let path_clone = path.clone();
+                let registry_clone = registry.clone();
+                
+                move || {
+                    self_clone.execute_sync(
+                        req_clone,
+                        &dangerous_commands_clone,
+                        require_confirmation,
+                        &policy_context_clone,
+                        audit_store,
+                        &path_clone,
+                        &registry_clone,
+                    )
+                }
             }),
         )
         .await
@@ -105,6 +128,7 @@ impl ToolRuntime {
     }
 
     fn execute_sync(
+        &self,
         req: ToolRequest,
         dangerous_commands: &[String],
         require_confirmation: bool,
@@ -113,8 +137,8 @@ impl ToolRuntime {
         path: &str,
         registry: &ToolRegistry,
     ) -> ToolResult {
-        let func_name = req.name;
-        let parsed_args = req.arguments;
+        let func_name = req.name.clone();
+        let parsed_args = req.arguments.clone();
 
         let args_payload = parsed_args.to_string();
         let args_hash = audit::hash_payload(&args_payload);
@@ -155,10 +179,37 @@ impl ToolRuntime {
                 reason_code,
                 message,
             } => {
-                return ToolResult {
-                    success: false,
-                    output: format!("[Approval Required: {}] {}", reason_code, message),
-                };
+                if let Some(requester) = &self.permission_requester {
+                    let handle = tokio::runtime::Handle::current();
+                    
+                    let mut reason = format!("[{}] {}", reason_code, message);
+                    if req.confidence < 0.8 {
+                        reason = format!("⚠️ LOW CONFIDENCE WARNING (Confidence: {:.2})\n{}", req.confidence, reason);
+                    }
+
+                    let request = PermissionRequest {
+                        tool_name: func_name.clone(),
+                        arguments: parsed_args.clone(),
+                        reason,
+                    };
+
+                    let response = handle.block_on(async {
+                        requester.request_permission(request).await
+                    });
+
+                    if response != PermissionResponse::Allow {
+                        return ToolResult {
+                            success: false,
+                            output: format!("Execution denied by user: [{}] {}", reason_code, message),
+                        };
+                    }
+                    // If allowed, continue to execution
+                } else {
+                    return ToolResult {
+                        success: false,
+                        output: format!("[Approval Required: {}] {}. No permission requester available.", reason_code, message),
+                    };
+                }
             }
             PolicyDecision::Deny {
                 reason_code,
@@ -180,7 +231,23 @@ impl ToolRuntime {
         let result = if func_name == "run_terminal_command" {
             Self::execute_sandboxed_command(&parsed_args, policy_context)
         } else if let Some(tool) = registry.get(&func_name) {
-            tool.execute(parsed_args, dangerous_commands, require_confirmation, policy_context)
+            if tool.is_transactional() {
+                if let Some(safety_loop) = &self.safety_loop {
+                    let res = safety_loop.execute_transactional(
+                        || tool.execute(parsed_args, dangerous_commands, require_confirmation, policy_context),
+                        |res| res.success // Default validation: just check success
+                    );
+                    match res {
+                        Ok(r) => r,
+                        Err(e) => ToolResult { success: false, output: e },
+                    }
+                } else {
+                    // Fallback to normal execution if no safety loop
+                    tool.execute(parsed_args, dangerous_commands, require_confirmation, policy_context)
+                }
+            } else {
+                tool.execute(parsed_args, dangerous_commands, require_confirmation, policy_context)
+            }
         } else {
             ToolResult {
                 success: false,

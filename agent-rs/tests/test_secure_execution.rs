@@ -56,15 +56,19 @@ async fn secure_runtime_logs_safe_and_blocked_commands() {
         call_id: "safe-1".to_string(),
         name: "run_terminal_command".to_string(),
         arguments: json!({ "command": "pwd" }),
+        confidence: 1.0,
     };
 
     let blocked_req = ToolRequest {
         call_id: "blocked-1".to_string(),
         name: "run_terminal_command".to_string(),
         arguments: json!({ "command": "ls | grep src" }),
+        confidence: 1.0,
     };
 
-    let (_, safe_result, _) = ToolRuntime::execute(
+    let tool_runtime = ToolRuntime::new(None, None);
+
+    let (_, safe_result, _) = tool_runtime.execute(
         safe_req,
         vec![],
         false,
@@ -77,7 +81,7 @@ async fn secure_runtime_logs_safe_and_blocked_commands() {
     .await;
     assert!(safe_result.success, "safe command should succeed: {}", safe_result.output);
 
-    let (_, blocked_result, _) = ToolRuntime::execute(
+    let (_, blocked_result, _) = tool_runtime.execute(
         blocked_req,
         vec![],
         false,

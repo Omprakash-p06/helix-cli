@@ -1,41 +1,96 @@
-# STRUCTURE.md
+# Codebase Structure
 
-## Snapshot
-Last refreshed: 2026-03-29
-Repository contains product code plus a large vendored/embedded `llama.cpp` tree.
+**Analysis Date:** 2025-05-15
 
-## Top-Level Layout
-- `agent-rs/`: Rust orchestrator and APIs
-- `scripts/`: Python operational scripts (server start, checks, branding)
-- `web-ui/`: React + Vite frontend
-- `tests/`: Python evaluation scripts and dataset
-- `.planning/`: roadmap, phase plans, research, codebase docs
-- `llama.cpp/`: large upstream inference backend source tree
-- Root scripts: `start.py`, `setup.py`, `update_milestone.py`
+## Directory Layout
 
-## Rust App Structure (`agent-rs/src`)
-- `main.rs`: top-level orchestration loop and mode routing
-- `server.rs`: Axum endpoints and SSE stream handling
-- `tui.rs`: terminal UI state/event system
-- `tools.rs`: tool schemas + execution with sandbox enforcement
-- `config.rs`: Python bridge for runtime config loading
-- `types.rs`: chat and protocol data structures
-- `stream.rs`: SSE parser utilities
-- `tokens.rs`, `utils.rs`, `input.rs`, `rag.rs`: support modules
+```
+helix-agent/
+├── agent-rs/           # Rust Core Agent
+│   ├── src/            # Source code
+│   │   ├── agent_core/ # Tool runtime and orchestration hooks
+│   │   ├── security/   # Policy engine and sandbox logic
+│   │   ├── tui/        # Terminal UI implementation
+│   │   └── server.rs   # API server (Axum)
+│   └── tests/          # Rust-specific tests
+├── llama.cpp/          # Inference Engine (Submodule/Vendor)
+├── web-ui/             # Frontend Application (React/Vite)
+├── scripts/            # Python automation and model management
+├── models/             # Local storage for GGUF weights
+└── .planning/          # Project documentation and roadmap
+```
 
-## Web App Structure (`web-ui/src`)
-- `App.tsx`: single-page chat UI and SSE client logic
-- `main.tsx`: React entry point
-- Styling in `App.css` and `index.css`
-- Static assets under `web-ui/public` and `web-ui/src/assets`
+## Directory Purposes
 
-## Planning and Process Files
-- `.planning/PROJECT.md`: project vision and milestones
-- `.planning/ROADMAP.md`: phase requirements and plan listings
-- `.planning/STATE.md`: current execution state and rules
-- `.planning/phases/*`: context, plans, summaries, validation docs
-- `.planning/codebase/*`: generated codebase map documents
+**agent-rs:**
+- Purpose: The "brain" and "muscle" of the agent.
+- Contains: Rust source code for AI orchestration, tool execution, and the TUI.
+- Key files: `src/main.rs` (Entry), `src/agent_core/tool_runtime.rs` (Execution).
 
-## Notable Scale Consideration
-- `llama.cpp/` dominates file count and can drown code search results.
-- Most Helix-specific product changes happen outside `llama.cpp/`.
+**security:**
+- Purpose: Defense-in-depth safety layer.
+- Contains: Policy definitions, command risk scanners, and audit trails.
+- Key files: `src/security/policy.rs`.
+
+**web-ui:**
+- Purpose: Modern GUI for users who prefer a dashboard over TUI.
+- Contains: React components, Vite configuration, and Tailwind styles.
+
+**scripts:**
+- Purpose: Lifecycle management.
+- Contains: Hardware checks, model installers, and server launchers.
+- Key files: `scripts/start_server.py`, `scripts/system_check.py`.
+
+## Key File Locations
+
+**Entry Points:**
+- `agent-rs/src/main.rs`: CLI/TUI entry.
+- `agent-rs/src/server.rs`: Web API entry.
+
+**Configuration:**
+- `scripts/config.py`: Global project configuration.
+- `agent-rs/Cargo.toml`: Rust dependencies.
+
+**Core Logic:**
+- `agent-rs/src/agent_core/tool_runtime.rs`: Tool execution sandbox.
+- `agent-rs/src/security/policy.rs`: Security guardrails.
+
+**Testing:**
+- `tests/`: End-to-end and integration tests (Python).
+- `agent-rs/tests/`: Rust core tests.
+
+## Naming Conventions
+
+**Files:**
+- Rust: `snake_case.rs`
+- TypeScript: `PascalCase.tsx` or `camelCase.ts`
+- Python: `snake_case.py`
+
+**Directories:**
+- Rust Modules: `snake_case/`
+- Frontend Components: `PascalCase/` or `kebab-case/`
+
+## Where to Add New Code
+
+**New Tool/Skill:**
+- Primary code: `agent-rs/src/tools.rs` (Registry) and implement the tool trait.
+- Policy check: `agent-rs/src/security/policy.rs`.
+
+**New UI Feature:**
+- Frontend: `web-ui/src/components/`.
+- Backend Hook: `agent-rs/src/server.rs`.
+
+**New Model Integration:**
+- Loading Logic: `scripts/start_server.py` and `agent-rs/src/runtime_profile.rs`.
+- Download Script: `scripts/model_install.py`.
+
+## Special Directories
+
+**models/:**
+- Purpose: Storage for multi-gigabyte GGUF files.
+- Generated: No (Downloaded).
+- Committed: No (Ignored in `.gitignore`).
+
+---
+
+*Structure analysis: 2025-05-15*

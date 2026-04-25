@@ -14,6 +14,7 @@ async fn test_tool_runtime_basic_execution() {
         call_id: "test_1".to_string(),
         name: "get_system_stats".to_string(),
         arguments: json!({}),
+        confidence: 1.0,
     };
 
     let policy_context = PolicyContext {
@@ -22,7 +23,8 @@ async fn test_tool_runtime_basic_execution() {
         workspace_root: std::path::PathBuf::from("."),
     };
 
-    let (id, result, name) = ToolRuntime::execute(
+    let tool_runtime = ToolRuntime::new(None, None);
+    let (id, result, name) = tool_runtime.execute(
         req,
         vec![],
         false,
@@ -54,19 +56,24 @@ async fn test_tool_runtime_concurrent_ordering() {
             call_id: "call_0".to_string(),
             name: "get_system_stats".to_string(),
             arguments: json!({}),
+            confidence: 1.0,
         },
         ToolRequest {
             call_id: "call_1".to_string(),
             name: "get_system_stats".to_string(),
             arguments: json!({}),
+            confidence: 1.0,
         },
     ];
+
+    let tool_runtime = Arc::new(ToolRuntime::new(None, None));
 
     let tasks: Vec<_> = requests.into_iter().enumerate().map(|(idx, req)| {
         let registry_owned = registry.clone();
         let pc_owned = policy_context.clone();
+        let tool_runtime_owned = tool_runtime.clone();
         async move {
-            (idx, ToolRuntime::execute(
+            (idx, tool_runtime_owned.execute(
                 req,
                 vec![],
                 false,
@@ -102,12 +109,12 @@ async fn test_tool_runtime_timeout() {
     let mut registry = tools::create_default_registry();
     registry.register(Box::new(SlowTool));
     let registry = Arc::new(registry);
-
-    let req = ToolRequest {
-        call_id: "timeout_test".to_string(),
-        name: "slow_tool".to_string(),
-        arguments: json!({}),
-    };
+let req = ToolRequest {
+    call_id: "timeout_test".to_string(),
+    name: "slow_tool".to_string(),
+    arguments: json!({}),
+    confidence: 1.0,
+};
 
     let policy_context = PolicyContext {
         permission_tier: PermissionTier::WorkspaceWrite,
@@ -115,7 +122,9 @@ async fn test_tool_runtime_timeout() {
         workspace_root: std::path::PathBuf::from("."),
     };
 
-    let (_, result, _) = ToolRuntime::execute(
+    let tool_runtime = ToolRuntime::new(None, None);
+
+    let (_, result, _) = tool_runtime.execute(
         req,
         vec![],
         false,
@@ -138,6 +147,7 @@ async fn test_tool_runtime_lifecycle_events() {
         call_id: "event_test".to_string(),
         name: "get_system_stats".to_string(),
         arguments: json!({}),
+        confidence: 1.0,
     };
 
     let policy_context = PolicyContext {
@@ -148,7 +158,9 @@ async fn test_tool_runtime_lifecycle_events() {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ToolLifecycle>();
 
-    ToolRuntime::execute(
+    let tool_runtime = ToolRuntime::new(None, None);
+
+    tool_runtime.execute(
         req,
         vec![],
         false,

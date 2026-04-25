@@ -1,52 +1,97 @@
-# ARCHITECTURE.md
+# Architecture
 
-## Snapshot
-Last refreshed: 2026-03-29
-Architecture is a hybrid local stack: Python boot/runtime control + Rust agent orchestration + optional React UI.
+**Analysis Date:** 2025-05-15
 
-## Major Layers
+## Pattern Overview
 
-### 1) Boot and Environment Layer (Python)
-- Entry point: `start.py`
-- Responsibilities:
-  - Model selection and mode selection (web vs tui, agentic vs chat)
-  - Start local inference server process
-  - Wait for model API readiness
-  - Start Rust orchestrator and optional web dev server
+**Overall:** Defense-in-depth AI Orchestrator.
 
-### 2) Inference Server Layer (Python + local binaries)
-- Launcher: `scripts/start_server.py`
-- Primary path: llama.cpp `llama-server`
-- Fallback path: KoboldCPP
-- Exposes OpenAI-compatible API at `:8080/v1`
+**Key Characteristics:**
+- **Local-First:** All inference and execution happen on the user's hardware.
+- **Autonomous Orchestration:** Uses GSD 2.0 to manage multi-step troubleshooting phases.
+- **Policy-Driven Security:** Every tool call is intercepted and evaluated against a permission tier.
 
-### 3) Agent Orchestrator Layer (Rust)
-- Main loop: `agent-rs/src/main.rs`
-- Behavior:
-  - Loads config via Python bridge (`agent-rs/src/config.rs`)
-  - Builds tool schemas/grammar
-  - Calls local model endpoint
-  - Parses streaming deltas and tool calls
-  - Supports chat, terminal UI, and web-server modes
-- Safety and tooling:
-  - Filesystem sandbox checks in `agent-rs/src/tools.rs`
-  - Dangerous command gating based on config
+## Layers
 
-### 4) Presentation Layer
-- TUI path: `agent-rs/src/tui.rs` (Ratatui + Crossterm)
-- Web path: `agent-rs/src/server.rs` + `web-ui/src/App.tsx`
-  - Axum emits SSE events
-  - React consumes incremental text and tool status events
+**Orchestration Layer (GSD 2.0):**
+- Purpose: Manages the `Discover → Discuss → Plan → Execute → Verify → Close` lifecycle.
+- Location: Integrated via GSD 2.0 Pi SDK into `agent-rs`.
+- Contains: Phase state machine, context reset logic, and autonomous recovery operators (RETRY, DECOMPOSE).
+- Depends on: `agent-rs` core.
+- Used by: User TUI/Web UI.
 
-## Data Flow (Web Mode)
-1. User submits message in React app.
-2. React calls `POST /chat` on Rust API (`:3000`).
-3. Rust agent sends request(s) to local LLM endpoint (`:8080/v1`).
-4. Rust emits SSE events (`text`, `tool_start`, `tool_result`, `error`, `done`).
-5. React app incrementally renders output and tool activity.
+**Intelligence Layer (Qwen 3.6):**
+- Purpose: Provides reasoning and tool-calling capabilities.
+- Location: `llama.cpp/` (Inference engine).
+- Contains: Qwen 3.6 (27B/35B MoE) model weights and sampler logic.
+- Depends on: Hardware (CUDA/Metal/CPU).
+- Used by: Orchestration Layer.
 
-## Data Flow (TUI Mode)
-1. User submits message in TUI.
-2. TUI action channel sends submit event to main loop.
-3. Main loop streams model output and tool events back to TUI event channel.
-4. TUI updates context HUD, content panes, and status indicators.
+**Execution Layer (Tool Runtime):**
+- Purpose: Executes terminal commands and filesystem operations.
+- Location: `agent-rs/src/agent_core/tool_runtime.rs`.
+- Contains: Tool registry and execution logic.
+- Depends on: Security Layer.
+- Used by: Orchestration Layer.
+
+**Security Layer:**
+- Purpose: Validates tool calls and enforces safety policies.
+- Location: `agent-rs/src/security/`.
+- Contains: Policy engine, command risk evaluation, and audit logging.
+- Depends on: `agent-rs` core.
+- Used by: Execution Layer.
+
+## Data Flow
+
+**Troubleshooting Flow:**
+
+1. **Discovery:** Agent identifies OS issue via diagnostic tools.
+2. **Planning:** GSD 2.0 generates a multi-step repair plan.
+3. **Approval:** User reviews plan in TUI/Web UI.
+4. **Execution:** Tool Runtime executes steps; Security Layer validates each command.
+5. **Verification:** GSD 2.0 verifies the repair (e.g., checking if service is back up).
+6. **Closure:** Audit log is finalized and session closed.
+
+**State Management:**
+- Orchestration state: Managed by GSD 2.0 (Pi SDK).
+- Persistence: SQLite database via `rusqlite`.
+
+## Key Abstractions
+
+**Tool Runtime (`agent-rs/src/agent_core/tool_runtime.rs`):**
+- Purpose: Standardizes how AI actions are executed, audited, and sandboxed.
+- Pattern: Strategy pattern for tool implementations.
+
+**Policy Engine (`agent-rs/src/security/policy.rs`):**
+- Purpose: Decouples safety rules from execution logic.
+- Pattern: Interceptor/Middleware.
+
+## Entry Points
+
+**Rust CLI/TUI:**
+- Location: `agent-rs/src/main.rs`.
+- Triggers: User execution of `helix-agent`.
+- Responsibilities: Bootstrapping the server, starting the TUI, and managing the local LLM lifecycle.
+
+**Web API:**
+- Location: `agent-rs/src/server.rs`.
+- Triggers: HTTP requests from `web-ui`.
+- Responsibilities: Exposing OpenAI-compatible endpoints and orchestration hooks.
+
+## Error Handling
+
+**Strategy:** Autonomous recovery with human escalation.
+
+**Patterns:**
+- **GSD 2.0 Operators:** RETRY, DECOMPOSE, and PRUNE for failed tasks.
+- **Graceful Fallback:** Switching between model tiers (27B vs 35B) if VRAM is constrained.
+
+## Cross-Cutting Concerns
+
+**Logging:** Centralized audit store in `agent-rs/src/audit.rs`.
+**Validation:** Regex-based command scanning and injection detection in `agent-rs/src/security/policy.rs`.
+**Authentication:** Permission tiers (ReadOnly/WorkspaceWrite/FullExec) determined at startup.
+
+---
+
+*Architecture analysis: 2025-05-15*

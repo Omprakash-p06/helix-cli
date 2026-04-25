@@ -1,77 +1,66 @@
-# Project: Helix Agent — Fast Local Automation Stack
+# Project: Helix OS Agent — Autonomous Local Troubleshooting Stack
 
 ## Vision
-The whole idea of the Helix Agent is to run local agents fast even on low-end systems, optimizing for agentic tasks with highly accurate tool calling. It acts as a local equivalent to cloud-based CLI agents (like claude-code and open-interpreter) but is engineered to run gracefully on low-end laptops using locally hosted models.
+Helix OS Agent is a local-first, autonomous AI system administrator designed to troubleshoot, diagnose, and repair operating system issues entirely on consumer hardware. Powered by Qwen 3.6 and orchestrated by GSD 2.0, it provides a privacy-first, secure, and verifiable alternative to cloud-based system management tools.
 
 ## Core Value
-Speed, reliability, and precision on strictly local hardware. Users should never fight hallucinations when evaluating tools, and response latency must be minimized using optimal hardware targets.
+**Safety, Autonomy, and Privacy.** Helix OS Agent bridges the gap between local AI capabilities and real-world system administration by enforcing a multi-layer security framework (Sandboxing, Policy Enforcement, Audit Logging) while delivering state-of-the-art agentic performance on strictly local hardware.
 
 ## What This Is
-A multi-layered AI orchestrator combining a Python setup/boot layer with a high-performance Rust orchestrator, talking seamlessly over localhost to an underlying `llama.cpp` or `koboldcpp` inference engine.
+A defense-in-depth AI orchestrator combining a high-performance Rust core (`agent-rs`) with an isolated execution sandbox. It utilizes the GSD 2.0 protocol to manage complex, multi-step troubleshooting workflows, ensuring every action is planned, verified, and auditable.
 
 ---
 
-## Current Milestone: v1.2 Chat Mode Polish & Streaming Reliability
+## Current Milestone: v2.0 Helix OS Agent Pivot
 
-**Goal:** Chat mode produces direct, concise responses without visible reasoning. Streaming is live (token-by-token). Tool calling is non-blocking with parallel support.
+**Goal:** Transform the general-purpose coding assistant into a specialized OS troubleshooting agent with a robust security foundation.
 
 **Target features:**
-- Strict system prompt enforcement for chat mode (no reasoning visible)
-- Intent detection to branch between chat vs. agentic modes
-- Post-processing filter to strip thinking traces and clean output
-- Raw byte streaming with immediate token-by-token rendering
-- Non-blocking async tool execution
-- Parallel & multi-tool support with concurrent execution
-- Shared types crate and codebase cleanup (clippy-clean, no warnings)
+- Qwen 3.6 integration (27B/35B MoE) for superior terminal task performance.
+- Docker/MicroVM execution sandboxing for all agent operations.
+- Command canonicalization and strict allowlist policy engine.
+- GSD 2.0 Pi SDK integration for autonomous orchestration.
+- Human-in-the-loop approval gates for system modifications.
+- Immutable, append-only audit logging for compliance and forensics.
 
 ---
 
-## Completed Milestones
+## Completed Milestones (Legacy Helix Agent)
 
-### v1.1 Operational Upgrades (Phases 9-14)
-- ✓ Fixed terminal chat warning and optimized system prompt (Phase 9)
-- ✓ Built TUI foundation with ratatui, input, and ghost autocomplete (Phase 10)
-- ✓ Implemented output polish and streaming (Phase 11)
-- ✓ Added control/feedback with interrupts and TTFT tracking (Phase 12)
-- ✓ Added context and discoverability layers (Phase 13)
-- ✓ Fixed TUI missing output bug with SSE parser repair + UAT gap closure (Phase 14)
+### v1.1 Operational Upgrades
+- ✓ Built TUI foundation with ratatui and rich input (Phases 10-14)
+- ✓ Implemented streaming and control feedback (Phases 11-12)
+- ✓ Grammar-enforced tool calling foundation (Phase 3)
 
 ---
 
 ## Requirements
 
-### Validated
+### Validated Foundation
 
-- ✓ Local LLM inference backend wrapper (llama.cpp)
-- ✓ Fallback backend support (koboldcpp)
-- ✓ Python hardware benchmarking and unified setup script
-- ✓ Rust orchestrator loop with local filesystem/terminal tool access
-- ✓ Dual UI Launcher (Terminal / Web)
-- ✓ Dual Mode Execution (Agentic / Chat)
-- ✓ Clinical Agent Personas without hallucinated dialogue
-- ✓ Modern Web Interface React app with real-time SSE streaming
-- ✓ Rich Terminal Input with Bracketed Paste
-- ✓ Deterministic Grammar-Enforced Tool Calling (GBNF schemas) across backends
-- ✓ Non-blocking async tool execution with parallel support (TOOL-01, TOOL-02, TOOL-03 — Phase 17)
+- ✓ Local LLM inference backend wrapper (llama.cpp/koboldcpp)
+- ✓ Rust orchestrator loop with TUI/Web UI support
+- ✓ Deterministic Grammar-Enforced Tool Calling (GBNF)
+- ✓ Multi-mode execution (Agentic / Chat)
 
-### Active
+### Active (Pivot Phase 01)
 
-- [ ] **CHAT-01 (Chat Mode Prompt):** Strict system prompt for chat mode enforcing concise, direct responses.
-- [ ] **CHAT-02 (Reasoning Filter):** Post-processing layer to strip thinking traces from chat mode output.
-- [ ] **STREAM-01 (Live Token Rendering):** No buffering; raw bytes read immediately and fed to terminal/TUI.
-- [ ] **STREAM-02 (Immediate Redraw):** Terminal flushes after each token. TUI redraws on every chunk.
-- [ ] **CODE-01 (Shared Types):** Extract common types into `agent_core` crate for reuse.
-- [ ] **CODE-02 (Tracing & Logging):** Structured logging for streaming delays and tool lifecycles.
-- [ ] **CODE-03 (Clippy Clean):** All code passes `cargo clippy` with zero warnings.
+- [ ] **SEC-01 (Execution Sandbox):** Build Docker/MicroVM wrapper for all agent commands.
+- [ ] **SEC-02 (Policy Engine):** Implement command canonicalization and strict allowlist.
+- [ ] **SEC-03 (Audit Log):** Implement append-only immutable audit logging.
+- [ ] **MOD-01 (Qwen 3.6):** Integrate Qwen 3.6 tiered model loading via llama.cpp.
 
-### Out of Scope
+### Active (Pivot Phase 02-03)
 
-- Cloud API endpoints handling primary cognitive loads (against the "local-first" philosophy).
-- Gradio or Streamlit interfaces (decided to focus on a proper fast modern frontend framework instead).
-- RAG / vector search (deferred post-v1.2).
-- Multi-agent coordination (deferred post-v1.2).
-- Persistent memory beyond session save/load (deferred post-v1.2).
-- Full Claude-like computer use (deferred post-v1.2).
+- [ ] **DIAG-01 (OS Introspection):** Cross-platform log readers and system state tools.
+- [ ] **FIX-01 (Approval Gate):** Mandatory "Ask-for-Permission" flow for repair actions.
+- [ ] **FIX-02 (Rollback):** Pre-repair filesystem/state snapshots.
+
+### Active (Pivot Phase 04-05)
+
+- [ ] **GSD-01 (Orchestration):** GSD 2.0 Pi SDK integration for multi-phase planning.
+- [ ] **GSD-02 (Autonomous Recovery):** RETRY/DECOMPOSE/PRUNE logic for failed tasks.
+- [ ] **SEC-04 (Guardian):** Multi-agent voting consensus for high-risk actions.
 
 ---
 
@@ -79,26 +68,10 @@ A multi-layered AI orchestrator combining a Python setup/boot layer with a high-
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Grammar Enforcement | Small 8B-14B models hallucinate JSON schemas easily. Native structural reinforcement (GBNF) forces 100% compliant outputs at the token generation level without massive context overhead. | Pending implementation across backends |
-| React/Svelte Web Stack | User specified a modern frontend (Option C) over basic Python wrappers, allowing long-term flexible UX scaling for the Web UI. | Pending implementation |
-| Rich Terminal Rust Crate | A primary pain-point for CLI dev tools is raw text pasting. `rustyline` resolves this seamlessly. | Pending implementation |
+| Qwen 3.6 Foundation | Matches/exceeds cloud models on Terminal-Bench 2.0 while fitting on consumer VRAM. | Strategic Foundation |
+| GSD 2.0 Orchestration | Provides autonomous error recovery, context reset, and verifiable outcomes. | Orchestration Standard |
+| Sandbox-First Security | AI agents with shell access are a security nightmare; architectural boundaries must exist. | Non-negotiable Requirement |
+| Local-First Privacy | OS troubleshooting involves sensitive logs and system state; cloud APIs are a privacy risk. | Core Value |
 
 ---
-*Last updated: 2026-04-06 — Phase 17 complete*
-
-## Evolution
-
-This document evolves at phase transitions and milestone boundaries.
-
-**After each phase transition** (via `/gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
-
-**After each milestone** (via `/gsd-complete-milestone`):
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
+*Last updated: 2026-04-24 — Pivot to Helix OS Agent initiated*

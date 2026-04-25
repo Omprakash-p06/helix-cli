@@ -31,6 +31,7 @@ pub struct AppState {
     pub server_flavor: ServerFlavor,
     pub audit_store: Option<Arc<AuditStore>>,
     pub tool_registry: Arc<ToolRegistry>,
+    pub tool_runtime: Arc<ToolRuntime>,
 }
 
 #[derive(Deserialize)]
@@ -66,6 +67,7 @@ pub async fn start_web_server(
     server_flavor: ServerFlavor,
     audit_store: Option<Arc<AuditStore>>,
     tool_registry: Arc<ToolRegistry>,
+    tool_runtime: Arc<ToolRuntime>,
 ) {
     let client = Client::builder()
         .no_gzip()
@@ -81,6 +83,7 @@ pub async fn start_web_server(
         server_flavor,
         audit_store,
         tool_registry,
+        tool_runtime,
     };
 
     let app = Router::new()
@@ -343,6 +346,7 @@ async fn chat_handler(
                         call_id: id.clone(),
                         name: func_name.clone(),
                         arguments: parsed_args,
+                        confidence: 1.0,
                     };
 
                     let (event_tx_inner, mut event_rx_inner) = mpsc::unbounded_channel::<ToolLifecycle>();
@@ -375,7 +379,7 @@ async fn chat_handler(
                         workspace_root: tools::get_allowed_dir(),
                     };
 
-                    let (_, tool_result, _) = ToolRuntime::execute(
+                    let (_, tool_result, _) = state.tool_runtime.execute(
                         req,
                         state.app_config.dangerous_commands.clone(),
                         state.app_config.require_confirmation,

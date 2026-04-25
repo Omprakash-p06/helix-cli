@@ -1,38 +1,36 @@
-# CONVENTIONS.md
+# Helix OS Agent Global Process Standards & Conventions
 
 ## Snapshot
-Last refreshed: 2026-03-29
-Conventions are inferred from current implementation and planning artifacts.
+Last refreshed: 2026-04-24
+Conventions updated to reflect the pivot to Autonomous OS Troubleshooting (Helix OS Agent).
 
-## Runtime and Mode Conventions
-- Environment variables drive mode selection:
-  - `HELIX_UI_MODE` (`tui` or `web`)
-  - `HELIX_EXEC_MODE` (`agentic` or `chat`)
-- Model/runtime values are sourced from Python `scripts/config.py` via Rust bridge.
+## 1. Security-First Execution (Non-Negotiable)
+- **Mandatory Sandboxing:** All agent-initiated shell commands and scripts MUST run inside an isolated Docker or MicroVM sandbox.
+- **Policy Engine Gate:** Every command must pass through the canonicalization and allowlist policy engine. No direct `sh -c` or `cmd /C` execution on the host without a policy verdict.
+- **Human-in-the-Loop:** All state-modifying actions (writes, restarts, installs) REQUIRE explicit user confirmation. No "silent" system modifications allowed in default modes.
 
-## Rust Code Conventions
-- Async-first style with `tokio` for I/O and streaming paths.
-- Message and API payloads represented via typed structs in `types.rs`.
-- Tool execution returns structured success/failure (`ToolResult`).
-- Sandboxing required for file operations (`enforce_sandbox` in `tools.rs`).
-- Event-based UI updates (`TuiAction` and `TuiEvent`).
+## 2. Orchestration Standards (GSD 2.0)
+- **Phase-Based Lifecycle:** Work follows the GSD 2.0 protocol: `Discover → Discuss → Plan → Execute → Verify → Close`.
+- **Context Management:** Reset LLM context between phases to prevent context rot. Major decision artifacts must be persisted as structured JSON/TOML, not conversation history.
+- **Verification Requirement:** Every task must have a deterministic verification step. Success is defined by state change validation, not model confirmation.
 
-## API/Event Conventions
-- Web agent route uses SSE with typed event labels:
-  - `text`, `tool_start`, `tool_result`, `system`, `error`, `done`
-- Rust web API is permissive CORS in current implementation.
+## 3. Observability and Auditability
+- **Immutable Audit Logging:** Every policy decision, command execution, and tool outcome must be recorded in an append-only, tamper-evident audit log.
+- **Reasoning Transparency:** Internal deliberation (`<think>` blocks) must be preserved in the audit log and exposed in the UI for transparency.
+- **Confidence Scoring:** Agents must output a confidence score for diagnostic hypotheses. Low confidence (<80%) triggers mandatory user re-verification.
 
-## UI Conventions
-- TUI: interaction-centric with explicit context and status updates.
-- Web UI: assistant messages can include both final text and intermediate events.
-- Markdown rendering enabled in web UI (`react-markdown` + `rehype-raw`).
+## 4. Rust Code Conventions (Core Orchestrator)
+- **Async-First:** `tokio` for all I/O, streaming, and tool spawning.
+- **Type Safety:** Use `agent_core` (or `types.rs`) for all message and payload definitions.
+- **Tool Registry:** Tools must be registered with explicit permission metadata (e.g., `Read`, `Write`, `Elevated`).
+- **Zero-Warning Policy:** Code must be clippy-clean and free of compiler warnings.
 
-## Planning Workflow Conventions
-- Work is tracked under `.planning/` with phase-numbered artifacts.
-- Plans and summaries are kept per phase directory.
-- Codebase maps live under `.planning/codebase/` and are refreshable snapshots.
+## 5. UI/UX Standards
+- **Streaming Reliability:** Raw byte-level streaming with immediate token rendering (no buffering delays).
+- **Interactive Feedback:** Real-time visual status for tool lifecycles (Running, Completed, Failed, Blocked).
+- **Rollback Visibility:** Users must be informed when a pre-repair snapshot is taken and offered a "Undo/Rollback" option.
 
-## Operational Safety Conventions
-- Dangerous shell commands may be blocked unless confirmation is disabled in config.
-- Tool output is truncated to prevent context blow-ups.
-- Context compaction is triggered near configured token threshold.
+## 6. Planning Workflow
+- **Phase Directories:** All active work resides in `.planning/phases/XX-name/`.
+- **Immutable GSD History:** Maintain an audit trail of phase transitions and plan executions.
+- **Renumbering Policy:** If phase numbers conflict, renumber chronologically during milestone cleanup.

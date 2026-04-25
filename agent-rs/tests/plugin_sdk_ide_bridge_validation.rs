@@ -40,6 +40,7 @@ mod agent_core {
             pub call_id: String,
             pub name: String,
             pub arguments: serde_json::Value,
+            pub confidence: f64,
         }
 
         #[derive(Debug, Clone, Serialize, Deserialize)]
