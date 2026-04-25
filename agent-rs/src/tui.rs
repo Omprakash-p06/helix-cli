@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 pub mod api;
+pub mod approval;
 pub mod commands;
 pub mod events;
 pub mod state;

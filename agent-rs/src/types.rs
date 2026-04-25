@@ -30,3 +30,21 @@ pub enum ServerFlavor {
     KoboldCpp,
     Unknown,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PermissionRequest {
+    pub tool_name: String,
+    pub arguments: Value,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum PermissionResponse {
+    Allow,
+    Deny,
+}
+
+#[async_trait::async_trait]
+pub trait PermissionRequester: Send + Sync {
+    async fn request_permission(&self, request: PermissionRequest) -> PermissionResponse;
+}
