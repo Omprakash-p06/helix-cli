@@ -59,7 +59,7 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 - [x] 04-01-PLAN.md — Establish core orchestration scaffold and Phase FSM.
 - [x] 04-02-PLAN.md — Implement context reset logic and autonomous recovery operators.
 - [x] 04-03-PLAN.md — Wire slash commands and main loop routing for GSD orchestration.
-- [ ] 04-04-PLAN.md — End-to-end integration tests and GSD 2.0 protocol validation.
+- [x] 04-04-PLAN.md — End-to-end integration tests and GSD 2.0 protocol validation.
 
 **Success Metrics:** Agent successfully navigates 5+ step repair workflows with automatic recovery from mid-step failures.
 
