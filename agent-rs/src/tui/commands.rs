@@ -152,6 +152,8 @@ pub fn execute_command(cmd: &Command) -> Option<TuiAction> {
         "save" => Some(TuiAction::SystemCommand("/save".into())),
         "load" => Some(TuiAction::SystemCommand("/load".into())),
         "resume" => Some(TuiAction::SystemCommand("/resume".into())),
+        "gsd_plan" => Some(TuiAction::SystemCommand("/gsd plan".into())),
+        "gsd_execute" => Some(TuiAction::SystemCommand("/gsd execute".into())),
         "quit" => Some(TuiAction::Quit),
         _ => None,
     }
