@@ -51,8 +51,45 @@ mod agent_core {
 
         pub struct ToolRuntime;
         impl ToolRuntime {
-            pub async fn execute(_: ToolRequest, _: Vec<String>, _: bool, _: crate::security::policy::PolicyContext, _: Option<std::sync::Arc<crate::audit::AuditStore>>, _: String, _: std::sync::Arc<crate::tools::ToolRegistry>, _: Option<tokio::sync::mpsc::UnboundedSender<ToolLifecycle>>) -> (String, ToolResult, String) {
+            pub async fn execute(&self, _: ToolRequest, _: Vec<String>, _: bool, _: crate::security::policy::PolicyContext, _: Option<std::sync::Arc<crate::audit::AuditStore>>, _: String, _: std::sync::Arc<crate::tools::ToolRegistry>, _: Option<tokio::sync::mpsc::UnboundedSender<ToolLifecycle>>) -> (String, ToolResult, String) {
                 ("id".into(), ToolResult { success: true, output: "mock".into() }, "name".into())
+            }
+        }
+    }
+    pub mod repair {
+        pub mod tools {
+            use serde_json::json;
+            use crate::tools::{Tool, ToolResult};
+            use crate::security::policy::PolicyContext;
+            
+            pub struct ServiceRepairTool;
+            impl Tool for ServiceRepairTool {
+                fn name(&self) -> String { "service_repair".into() }
+                fn description(&self) -> String { "mock".into() }
+                fn schema(&self) -> serde_json::Value { json!({}) }
+                fn execute(&self, _: serde_json::Value, _: &[String], _: bool, _: &PolicyContext) -> ToolResult {
+                    ToolResult { success: true, output: "mock".into() }
+                }
+            }
+
+            pub struct PackageRepairTool;
+            impl Tool for PackageRepairTool {
+                fn name(&self) -> String { "package_repair".into() }
+                fn description(&self) -> String { "mock".into() }
+                fn schema(&self) -> serde_json::Value { json!({}) }
+                fn execute(&self, _: serde_json::Value, _: &[String], _: bool, _: &PolicyContext) -> ToolResult {
+                    ToolResult { success: true, output: "mock".into() }
+                }
+            }
+
+            pub struct PermissionRepairTool;
+            impl Tool for PermissionRepairTool {
+                fn name(&self) -> String { "permission_repair".into() }
+                fn description(&self) -> String { "mock".into() }
+                fn schema(&self) -> serde_json::Value { json!({}) }
+                fn execute(&self, _: serde_json::Value, _: &[String], _: bool, _: &PolicyContext) -> ToolResult {
+                    ToolResult { success: true, output: "mock".into() }
+                }
             }
         }
     }
@@ -112,6 +149,7 @@ mod server {
         fn sample_state() -> AppState {
             AppState {
                 client: Client::new(),
+                tool_runtime: Arc::new(crate::agent_core::tool_runtime::ToolRuntime),
                 app_config: AppConfig {
                     base_url: "http://127.0.0.1:8080/v1".to_string(),
                     model_name: "demo-model".to_string(),
@@ -155,13 +193,16 @@ mod server {
                 "get_service_status".to_string(),
                 "search_system_files".to_string(),
                 "get_system_logs".to_string(),
+                "service_repair".to_string(),
+                "package_repair".to_string(),
+                "permission_repair".to_string(),
             ]);
 
             assert_eq!(names, expected);
 
             let os_assistant_payload = registry.build_tools_payload("os_assistant", true);
             let os_tools = os_assistant_payload.as_array().expect("payload array");
-            assert_eq!(os_tools.len(), 10);
+            assert_eq!(os_tools.len(), 13);
             assert!(os_tools.iter().any(|tool| tool["function"]["name"] == "run_terminal_command"));
             assert!(!os_tools.iter().any(|tool| tool["function"]["name"] == "search_codebase"));
 

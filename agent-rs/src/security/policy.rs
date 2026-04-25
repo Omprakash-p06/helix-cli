@@ -89,15 +89,25 @@ impl std::error::Error for SecurityError {}
 
 const ALLOWLIST: &[&str] = &[
     "ls", "cat", "pwd", "echo", "git", "rg", "cargo", "npm", "node", "python", "pytest", "sed",
-    "awk", "head", "tail", "wc", "find",
+    "awk", "head", "tail", "wc", "find", "journalctl", "chmod", "chown", "systemctl",
 ];
 
 const DANGEROUS_COMMANDS: &[&str] = &[
-    "rm", "dd", "mkfs", "fdisk", "shutdown", "reboot", "systemctl", "sudo", "chmod", "chown",
+    "rm", "dd", "mkfs", "fdisk", "shutdown", "reboot", "sudo",
 ];
 
 const SHELL_METACHARACTERS: &[char] = &[
     '|', ';', '&', '>', '<', '`', '$', '(', ')', '{', '}', '[', ']',
+];
+
+const DIAGNOSTIC_PATH_ALLOWLIST: &[&str] = &[
+    "/etc",
+    "/var/log",
+    "/proc",
+    "/sys",
+    "/run",
+    "/Library/Logs", // macOS
+    "/var/db/diagnostics", // macOS
 ];
 
 pub struct PolicyEngine {
@@ -174,6 +184,14 @@ impl PolicyEngine {
             return Ok(candidate.display().to_string());
         }
 
+        // Check against diagnostic allowlist
+        for allowed_prefix in DIAGNOSTIC_PATH_ALLOWLIST {
+            let allowed_path = Path::new(allowed_prefix);
+            if candidate.starts_with(allowed_path) {
+                return Ok(candidate.display().to_string());
+            }
+        }
+
         let relative_input = candidate
             .strip_prefix(&workspace_root)
             .map(PathBuf::from)
@@ -199,10 +217,20 @@ pub fn tier_allows_tool(tier: PermissionTier, tool_name: &str) -> bool {
         PermissionTier::ReadOnly => {
             matches!(
                 tool_name,
-                "read_file" | "list_directory" | "search_codebase" | "get_system_stats"
+                "read_file"
+                    | "list_directory"
+                    | "search_codebase"
+                    | "get_system_stats"
+                    | "list_processes"
+                    | "get_service_status"
+                    | "search_system_files"
+                    | "get_system_logs"
             )
         }
-        PermissionTier::WorkspaceWrite => !matches!(tool_name, "run_terminal_command"),
+        PermissionTier::WorkspaceWrite => !matches!(
+            tool_name,
+            "run_terminal_command" | "service_repair" | "package_repair" | "permission_repair"
+        ),
         PermissionTier::FullExec => true,
     }
 }
@@ -321,6 +349,12 @@ fn is_medium_risk_command(tokens: &[String]) -> bool {
     };
 
     let first_lower = first.to_lowercase();
+    
+    // Commands that always require approval
+    if matches!(first_lower.as_str(), "chmod" | "chown" | "systemctl") {
+        return true;
+    }
+
     if first_lower == "git" {
         return tokens
             .get(1)
@@ -467,6 +501,15 @@ mod tests {
             let workspace = workspace_root();
             let error = validate_command("rm -rf ./src", &workspace).unwrap_err();
             assert!(matches!(error, SecurityError::DangerousCommand(_)));
+        }
+
+        #[test]
+        fn diagnostic_paths_allowed_beyond_workspace() {
+            let workspace = workspace_root();
+            // /etc is in the allowlist
+            let tokens = validate_command("cat /etc/hostname", &workspace).expect("should allow /etc");
+            assert_eq!(tokens[0], "cat");
+            assert_eq!(tokens[1], "/etc/hostname");
         }
     }
 }

@@ -9,6 +9,9 @@ use std::process::Command;
 use sysinfo::System;
 
 use crate::security::policy::PolicyContext;
+use crate::agent_core::diagnostics::system::SystemProvider;
+use crate::agent_core::diagnostics::logs;
+use crate::agent_core::repair::tools::{ServiceRepairTool, PackageRepairTool, PermissionRepairTool};
 pub use crate::agent_core::tool_runtime::ToolResult;
 
 // ==========================================
@@ -60,6 +63,29 @@ pub struct SearchCodebaseInput {
     pub query: String,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct ListProcessesInput {
+    pub dummy: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GetServiceStatusInput {
+    pub service_name: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct GetSystemLogsInput {
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSystemFilesInput {
+    pub query: String,
+    pub path: String,
+}
+
 // ==========================================
 
 pub trait Tool: Send + Sync {
@@ -107,7 +133,7 @@ impl ToolRegistry {
             if (name == "write_file" || name == "append_file") && !(persona == "os_assistant" || persona == "coder") {
                 continue;
             }
-            if name == "run_terminal_command" && persona != "os_assistant" {
+            if (name == "run_terminal_command" || name == "service_repair" || name == "package_repair" || name == "permission_repair") && persona != "os_assistant" {
                 continue;
             }
             if name == "search_codebase" {
@@ -138,6 +164,13 @@ pub fn create_default_registry() -> ToolRegistry {
     registry.register(Box::new(ListDirectoryTool));
     registry.register(Box::new(GetSystemStatsTool));
     registry.register(Box::new(SearchCodebaseTool));
+    registry.register(Box::new(ListProcessesTool));
+    registry.register(Box::new(GetServiceStatusTool));
+    registry.register(Box::new(SearchSystemFilesTool));
+    registry.register(Box::new(GetSystemLogsTool));
+    registry.register(Box::new(ServiceRepairTool));
+    registry.register(Box::new(PackageRepairTool));
+    registry.register(Box::new(PermissionRepairTool));
     registry
 }
 
@@ -230,6 +263,55 @@ impl Tool for SearchCodebaseTool {
     }
 }
 
+struct ListProcessesTool;
+impl Tool for ListProcessesTool {
+    fn name(&self) -> String { "list_processes".into() }
+    fn description(&self) -> String { "Lists all running processes with PID, CPU, and memory usage.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(ListProcessesInput).into() }
+    fn execute(&self, _args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        execute_list_processes()
+    }
+}
+
+struct GetServiceStatusTool;
+impl Tool for GetServiceStatusTool {
+    fn name(&self) -> String { "get_service_status".into() }
+    fn description(&self) -> String { "Queries the status of a system service (e.g., docker, systemd-resolved).".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(GetServiceStatusInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<GetServiceStatusInput>(args) {
+            Ok(input) => execute_get_service_status(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct SearchSystemFilesTool;
+impl Tool for SearchSystemFilesTool {
+    fn name(&self) -> String { "search_system_files".into() }
+    fn description(&self) -> String { "Searches for a query string in system files at a specified path using rg.".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(SearchSystemFilesInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<SearchSystemFilesInput>(args) {
+            Ok(input) => execute_search_system_files(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
+struct GetSystemLogsTool;
+impl Tool for GetSystemLogsTool {
+    fn name(&self) -> String { "get_system_logs".into() }
+    fn description(&self) -> String { "Retrieves system logs (Linux journald or Windows Event Log).".into() }
+    fn schema(&self) -> Value { schemars::schema_for!(GetSystemLogsInput).into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<GetSystemLogsInput>(args) {
+            Ok(input) => execute_get_system_logs(input),
+            Err(e) => ToolResult { success: false, output: format!("Schema error: {}", e) },
+        }
+    }
+}
+
 // ==========================================
 // CORE EXECUTION WRAPPERS
 // ==========================================
@@ -242,6 +324,16 @@ pub fn get_allowed_dir() -> PathBuf {
         current_dir
     }
 }
+
+const DIAGNOSTIC_PATH_ALLOWLIST: &[&str] = &[
+    "/etc",
+    "/var/log",
+    "/proc",
+    "/sys",
+    "/run",
+    "/Library/Logs",
+    "/var/db/diagnostics",
+];
 
 fn enforce_sandbox(target_path: &str) -> Result<PathBuf, String> {
     let allowed_dir = std::fs::canonicalize(get_allowed_dir())
@@ -261,15 +353,44 @@ fn enforce_sandbox(target_path: &str) -> Result<PathBuf, String> {
         resolved_parent.join(path.file_name().unwrap_or_default())
     };
 
-    if !resolved.starts_with(&allowed_dir) {
-        return Err(format!(
-            "SECURITY VIOLATION: Path '{}' is outside the strictly allowed directory '{}'. Refusing to execute.",
-            resolved.display(),
-            allowed_dir.display()
-        ));
+    if resolved.starts_with(&allowed_dir) {
+        return Ok(resolved);
     }
 
-    Ok(resolved)
+    // Check diagnostic allowlist
+    for allowed_prefix in DIAGNOSTIC_PATH_ALLOWLIST {
+        let allowed_path = Path::new(allowed_prefix);
+        if resolved.starts_with(allowed_path) {
+            if is_sensitive_diagnostic_path(&resolved) {
+                break;
+            }
+            return Ok(resolved);
+        }
+    }
+
+    Err(format!(
+        "SECURITY VIOLATION: Path '{}' is outside the strictly allowed directory '{}' and diagnostic allowlist. Refusing to execute.",
+        resolved.display(),
+        allowed_dir.display()
+    ))
+}
+
+fn is_sensitive_diagnostic_path(path: &Path) -> bool {
+    let Some(path_str) = path.to_str() else {
+        return false;
+    };
+
+    let sensitive_suffixes = [
+        "/etc/shadow",
+        "/etc/gshadow",
+        "/etc/sudoers",
+        "/root/",
+        "/root",
+        "/.ssh/",
+        "/.ssh",
+    ];
+
+    sensitive_suffixes.iter().any(|needle| path_str == *needle || path_str.contains(needle))
 }
 
 fn tail_truncate(s: &str, max_chars: usize) -> String {
@@ -613,5 +734,107 @@ pub fn generate_tool_grammar(tools_payload: &serde_json::Value) -> String {
             println!("[Warn] Failed to generate grammar from tools: {}", e);
             String::new()
         }
+    }
+}
+
+fn execute_list_processes() -> ToolResult {
+    let mut provider = SystemProvider::new();
+    let processes = provider.list_processes();
+
+    let mut output = String::from("PID | Name | CPU % | Mem (MB) | Status\n");
+    output.push_str("----|------|-------|----------|-------\n");
+    for p in processes {
+        output.push_str(&format!(
+            "{} | {} | {:.1} | {} | {}\n",
+            p.pid, p.name, p.cpu_usage, p.memory_usage / 1024 / 1024, p.status
+        ));
+    }
+
+    ToolResult {
+        success: true,
+        output: tail_truncate(&output, CMD_OUTPUT_MAX_CHARS),
+    }
+}
+
+fn execute_get_service_status(input: GetServiceStatusInput) -> ToolResult {
+    let status = SystemProvider::get_service_status(&input.service_name);
+    ToolResult {
+        success: true,
+        output: status,
+    }
+}
+
+fn execute_search_system_files(input: SearchSystemFilesInput) -> ToolResult {
+    let resolved_path = match enforce_sandbox(&input.path) {
+        Ok(p) => p,
+        Err(e) => return ToolResult { success: false, output: e },
+    };
+
+    println!("Searching '{}' in '{}' using rg", input.query, resolved_path.display());
+
+    let mut process = Command::new("rg");
+    process.arg("--json")
+           .arg("--max-count").arg("100")
+           .arg(&input.query)
+           .arg(&resolved_path);
+
+    match process.output() {
+        Ok(out) => {
+            let success = out.status.success() || out.status.code() == Some(1); // rg returns 1 if no matches
+            let raw = String::from_utf8_lossy(&out.stdout);
+            ToolResult {
+                success,
+                output: tail_truncate(&raw, CMD_OUTPUT_MAX_CHARS),
+            }
+        }
+        Err(e) => ToolResult {
+            success: false,
+            output: format!("Failed to execute rg: {}", e),
+        },
+    }
+}
+
+fn execute_get_system_logs(input: GetSystemLogsInput) -> ToolResult {
+    let limit = input.limit.unwrap_or(50);
+    match logs::get_system_logs(limit) {
+        Ok(entries) => {
+            let output = serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "Error serializing logs".to_string());
+            ToolResult {
+                success: true,
+                output: tail_truncate(&output, CMD_OUTPUT_MAX_CHARS),
+            }
+        }
+        Err(e) => ToolResult {
+            success: false,
+            output: format!("Error retrieving logs: {}", e),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_system_files_allows_benign_diagnostic_paths() {
+        let resolved = enforce_sandbox("/etc/hostname").expect("/etc/hostname should be allowed");
+        assert!(resolved.starts_with("/etc"));
+    }
+
+    #[test]
+    fn search_system_files_blocks_sensitive_paths() {
+        let err = enforce_sandbox("/etc/shadow").expect_err("/etc/shadow should be blocked");
+        assert!(err.contains("SECURITY VIOLATION"));
+    }
+
+    #[test]
+    fn search_system_files_tool_surface_blocks_sensitive_paths() {
+        let result = execute_search_system_files(SearchSystemFilesInput {
+            query: "root".to_string(),
+            path: "/etc/shadow".to_string(),
+        });
+
+        assert!(!result.success);
+        assert!(result.output.contains("SECURITY VIOLATION"));
     }
 }
