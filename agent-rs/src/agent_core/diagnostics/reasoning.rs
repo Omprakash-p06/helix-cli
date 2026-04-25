@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit::{AuditStore, hash_payload};
 use crate::agent_core::diagnostics::logs::{get_system_logs};
 use crate::agent_core::diagnostics::system::{SystemProvider};
+use crate::agent_core::repair::scoring::calculate_confidence;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DiagnosticState {
@@ -17,6 +18,7 @@ pub struct Hypothesis {
     pub description: String,
     pub status: HypothesisStatus,
     pub evidence: Vec<String>,
+    pub confidence: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -119,6 +121,7 @@ impl DiagnosticEngine {
             description: description.clone(),
             status: HypothesisStatus::Pending,
             evidence: Vec::new(),
+            confidence: 0.0,
         });
 
         if let Some(ref audit) = self.audit_store {
@@ -158,6 +161,20 @@ impl DiagnosticEngine {
                     None,
                 );
             }
+        }
+    }
+
+    pub fn update_hypothesis_confidence(&mut self, index: usize, token_probs: f64, reliability: f64) {
+        if let Some(h) = self.hypotheses.get_mut(index) {
+            let coverage = if self.evidence_collected.is_empty() {
+                0.0
+            } else {
+                // Evidence coverage: ratio of evidence supporting this hypothesis vs total evidence
+                // Clamped to 1.0 just in case
+                (h.evidence.len() as f64 / 3.0).min(1.0) // Heuristic: 3 pieces of evidence is "full" coverage for a single hypothesis
+            };
+            
+            h.confidence = calculate_confidence(token_probs, reliability, coverage);
         }
     }
 
