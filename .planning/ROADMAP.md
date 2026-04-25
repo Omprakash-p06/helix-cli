@@ -57,7 +57,7 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 **Requirements:** [GSD-01, GSD-02, GSD-03]
 **Plans:**
 - [x] 04-01-PLAN.md — Establish core orchestration scaffold and Phase FSM.
-- [ ] 04-02-PLAN.md — Implement context reset logic and autonomous recovery operators.
+- [x] 04-02-PLAN.md — Implement context reset logic and autonomous recovery operators.
 - [ ] 04-03-PLAN.md — Wire slash commands and main loop routing for GSD orchestration.
 - [ ] 04-04-PLAN.md — End-to-end integration tests and GSD 2.0 protocol validation.
 
