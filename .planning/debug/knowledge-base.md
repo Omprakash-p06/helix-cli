@@ -11,3 +11,11 @@ Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypothe
 - **Fix:** Added Rust-side recovery retries and safe auto-boot, enabled launcher env overrides and CPU fallback defaults, disabled chat thinking via `chat_template_kwargs.enable_thinking=false`, and added non-empty visible fallback handling.
 - **Files changed:** agent-rs/src/main.rs, scripts/start_server.py, scripts/config.py, .planning/debug/resolved/http-error-model-unreachable.md
 ---
+## test-registry-mismatch — Test failure due to outdated hardcoded tool list
+- **Date:** 2026-04-25
+- **Error patterns:** assertion left == right failed, plugin_sdk_ide_bridge_validation, registry_exposes_all_builtins_and_persona_filters_payloads
+- **Root cause:** The test had hardcoded expectations for the number and names of tools in the registry, which were not updated after new diagnostic tools were added.
+- **Fix:** Updated the expected tool list and adjusted payload length assertions in the test.
+- **Files changed:** agent-rs/tests/plugin_sdk_ide_bridge_validation.rs
+---
+
