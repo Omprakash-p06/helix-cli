@@ -28,8 +28,6 @@ def temp_models_dir(tmp_path):
     staging_dir.mkdir()
     
     # Monkeypatch original paths in model_install if needed
-    # (Actually for tests it might be better to make them configurable)
-    # But for a quick test, we can use these.
     return models_dir, staging_dir
 
 def test_verify_model_integrity(tmp_path):
@@ -43,9 +41,10 @@ def test_verify_model_integrity(tmp_path):
     assert verify_model_integrity(model_file, "wrong_hash") is False
 
 def test_resolve_model_ref():
-    assert resolve_model_ref("gpt-oss-20b") is not None
+    # Updated to use models actually in TRUSTED_MODELS
+    assert resolve_model_ref("qwen-3.6-27b-moe") is not None
     assert resolve_model_ref("non_existent_model") is None
-    assert resolve_model_ref("DavidAU/OpenAi-GPT-oss-20b-abliterated-uncensored-NEO-Imatrix-gguf") is not None
+    assert resolve_model_ref("Qwen/Qwen3.6-27B-Instruct-GGUF") is not None
 
 def test_install_model_spec_checksum_failure(tmp_path, monkeypatch):
     # Use tmp_path for MODELS_DIR and STAGING_DIR
@@ -61,11 +60,13 @@ def test_install_model_spec_checksum_failure(tmp_path, monkeypatch):
     
     monkeypatch.setattr("model_install.download_model_to_staging", lambda spec, **kwargs: dummy_model)
     
+    fake_sha = "a" * 64
     spec = {
         "name": "Tampered Model",
         "repo": "some/repo",
         "filename": "fail_model.gguf",
-        "sha256": "expected_but_not_matching"
+        "revision": "deadbeef" * 5, # 40 char pinned revision
+        "sha256": fake_sha
     }
     
     # This should fail the integrity check and return False
@@ -91,6 +92,7 @@ def test_install_model_spec_success(tmp_path, monkeypatch):
         "name": "Good Model",
         "repo": "some/repo",
         "filename": "good_model.gguf",
+        "revision": "12345678" * 5, # 40 char pinned revision
         "sha256": good_hash
     }
     
