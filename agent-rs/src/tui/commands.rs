@@ -69,6 +69,24 @@ pub fn default_commands() -> Vec<Command> {
             immediate: true,
         },
         Command {
+            id: "gsd_plan".into(),
+            name: "/gsd plan".into(),
+            description: "Plan the next GSD orchestration phase".into(),
+            example: "/gsd plan \"fix network issues\"".into(),
+            shortcut: None,
+            category: CommandCategory::Mode,
+            immediate: false,
+        },
+        Command {
+            id: "gsd_execute".into(),
+            name: "/gsd execute".into(),
+            description: "Execute the current GSD phase plan".into(),
+            example: "/gsd execute".into(),
+            shortcut: None,
+            category: CommandCategory::Mode,
+            immediate: true,
+        },
+        Command {
             id: "undo".into(),
             name: "/undo".into(),
             description: "Undo the last action or message".into(),
@@ -192,6 +210,8 @@ mod tests {
         assert!(cmds.iter().any(|c| c.id == "clear"));
         assert!(cmds.iter().any(|c| c.id == "agent"));
         assert!(cmds.iter().any(|c| c.id == "chat"));
+        assert!(cmds.iter().any(|c| c.id == "gsd_plan"));
+        assert!(cmds.iter().any(|c| c.id == "gsd_execute"));
         assert!(cmds.iter().any(|c| c.id == "resume"));
     }
 
