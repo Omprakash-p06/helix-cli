@@ -113,13 +113,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_advance_phase_discover() {
-        let temp_dir = tempdir_in(env::temp_dir()).unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
-
+        let phase_num = 90;
+        let slug = "test-discover";
         let outcome = advance_phase(
             Phase::Discover,
-            4,
-            "test",
+            phase_num,
+            slug,
             "System OK".to_string(),
             json!({}),
             None,
@@ -128,17 +127,16 @@ mod tests {
 
         assert_eq!(outcome.next, Some(Phase::Discuss));
         assert!(outcome.artifact_path.contains("discover.json"));
+        
+        let _ = tokio::fs::remove_dir_all(format!(".planning/phases/{:02}-{}", phase_num, slug)).await;
     }
 
     #[tokio::test]
     async fn test_advance_phase_execute() {
-        let temp_dir = tempdir_in(env::temp_dir()).unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
-
         let outcome = advance_phase(
             Phase::Execute,
-            4,
-            "test",
+            91,
+            "test-execute",
             "System OK".to_string(),
             json!({}),
             None,
@@ -147,5 +145,7 @@ mod tests {
 
         assert_eq!(outcome.next, Some(Phase::Verify));
         assert!(outcome.artifact_path.contains("execution.json"));
+        
+        let _ = tokio::fs::remove_dir_all(".planning/phases/91-test-execute").await;
     }
 }

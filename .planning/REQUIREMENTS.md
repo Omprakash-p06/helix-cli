@@ -1,7 +1,7 @@
 # Helix OS Agent Requirements
 
 ## Core Objective
-Deliver a local-first, autonomous AI OS troubleshooting agent that can safely diagnose and repair system issues with verifiable outcomes and strict security guardrails.
+Deliver a local-first, autonomous AI OS troubleshooting agent that can safely diagnose and repair system issues using any locally available LLM, with verifiable outcomes and strict security guardrails.
 
 ---
 
@@ -16,8 +16,8 @@ A canonicalization engine must normalize all commands before evaluation against 
 ### ✓ SEC-03: Immutable Audit Logging
 Every action (command, reasoning, outcome, timestamp) must be recorded in an append-only, tamper-evident log stored outside the agent's writeable sandbox.
 
-### ✓ MOD-01: Qwen 3.6 Tiered Integration
-Native support for Qwen 3.6 series (27B and 35B MoE) with hardware-aware quantization selection to ensure agentic performance on consumer GPUs (8GB-24GB VRAM).
+### ✓ MOD-01: Multi-Model Local Integration
+Support for running any local LLM (GGUF) provided in the `models/` directory. The system must not be hardcoded to a specific model series.
 
 ---
 
@@ -34,15 +34,15 @@ Sandboxed file search (`find`, `grep`) and read capabilities restricted to diagn
 
 ---
 
-## [Phase 03] Guided Repair & Human-Approved Fixes
+## [Phase 03] Guided Repair & Human-Approved Fixes (Completed)
 
-### FIX-01: Approval Gate (Human-in-the-Loop)
+### ✓ FIX-01: Approval Gate (Human-in-the-Loop)
 Any command that modifies system state (writes files, restarts services, installs packages) MUST pause for explicit human confirmation in the TUI/Web UI.
 
-### FIX-02: Rollback Snapshots
+### ✓ FIX-02: Rollback Snapshots
 The system must attempt to create a restorable snapshot (filesystem or config backup) before executing any state-modifying repair.
 
-### FIX-03: Confidence Scoring
+### ✓ FIX-03: Confidence Scoring
 The agent must provide a confidence percentage for each diagnosis and repair recommendation; scores below a threshold (e.g., 80%) trigger mandatory extra warnings.
 
 ---
@@ -60,16 +60,19 @@ Implementation of GSD's Node repair operator (RETRY, DECOMPOSE, PRUNE) to handle
 
 ---
 
-## [Phase 05] Autonomous "Fix It" Mode & Multi-agent Voting
+## [Phase 05] Model Management & UX Polish (Active)
 
-### AUTO-01: Trust Level Configuration
-Users can toggle between "Safe Mode" (confirm everything) and "Auto Mode" (auto-approve routine/low-risk repairs).
+### MOD-02: Dynamic Model Discovery
+The application must scan the `models/` directory on startup and allow the user to select the desired model if multiple files are present.
 
-### SEC-04: Guardian Consensus (Voting)
-High-risk actions in Auto Mode require consensus from multiple "Guardian" agents with distinct security-focused prompts.
+### MOD-03: Hugging Face Downloader
+A tool/command must be available to download any GGUF model directly from Hugging Face by repository name and filename, including SHA256 verification.
+
+### UX-01: GSD Message Autofill
+The UI must automatically suggest and populate the input field with the next logical GSD command (e.g., `/gsd plan`, `/gsd execute`) based on the current orchestration state.
 
 ### SEC-05: Blocklist Enforcement
-A hardcoded, non-bypassable blocklist of destructive commands (e.g., `rm -rf /`, `mkfs`, `dd`) that the agent cannot execute under any trust level.
+A hardcoded, non-bypassable blocklist of destructive commands (e.g., `rm -rf /`, `mkfs`, `dd`) that the agent cannot execute.
 
 ---
 
@@ -85,4 +88,4 @@ A hardcoded, non-bypassable blocklist of destructive commands (e.g., `rm -rf /`,
 ## Out of Scope
 *   Cloud-only LLM models as the primary reasoning engine.
 *   Automated repair of BIOS/Firmware-level issues.
-*   Unattended execution on production servers without a human supervisor (for MVP).
+*   Persistent "Last Saved Session" (removed in v2.0 pivot).

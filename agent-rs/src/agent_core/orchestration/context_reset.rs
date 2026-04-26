@@ -70,18 +70,18 @@ impl ContextResetter {
 mod tests {
     use super::*;
     use crate::agent_core::orchestration::artifacts::save_artifact;
-    use tempfile::tempdir_in;
-    use std::env;
-
     #[tokio::test]
     async fn test_rebuild_prompt() {
-        let temp_dir = tempdir_in(env::temp_dir()).unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
-
         let resetter = ContextResetter::new("OS: Linux".to_string());
-        
+
+        let phase_num = 92;
+        let slug = "test-rebuild";
+
         // Test Plan phase
-        let prompt = resetter.rebuild_prompt(Phase::Plan, 1, "test").await.unwrap();
+        let prompt = resetter
+            .rebuild_prompt(Phase::Plan, phase_num, slug)
+            .await
+            .unwrap();
         assert!(prompt.contains("OS: Linux"));
         assert!(prompt.contains("Entering Phase: Plan"));
         assert!(prompt.contains("Task: Create an execution plan."));
@@ -91,10 +91,20 @@ mod tests {
             summary: "Test summary".to_string(),
             tasks: vec!["Task A".to_string()],
         };
-        save_artifact(1, "test", "plan.json", &plan_artifact).await.unwrap();
+        save_artifact(phase_num, slug, "plan.json", &plan_artifact)
+            .await
+            .unwrap();
 
-        let prompt_exec = resetter.rebuild_prompt(Phase::Execute, 1, "test").await.unwrap();
-        assert!(prompt_exec.contains("Test summary"));
-        assert!(prompt_exec.contains("Task A"));
+        let execute_prompt = resetter
+            .rebuild_prompt(Phase::Execute, phase_num, slug)
+            .await
+            .unwrap();
+        assert!(execute_prompt.contains("Test summary"));
+        assert!(execute_prompt.contains("Task A"));
+
+        let _ = tokio::fs::remove_dir_all(
+            crate::agent_core::orchestration::artifacts::get_phase_dir(phase_num, slug),
+        )
+        .await;
     }
 }

@@ -1,5 +1,5 @@
 use agent_rs::{
-    config, input, session, security, server, stream, tokens, tools, tui,
+    config, input, security, server, stream, tokens, tools, tui,
     utils, runtime_profile, watchdog, audit,
     ChatMessage, ChatResponse, ServerFlavor, critic_message, expose_think_blocks,
 };
@@ -326,14 +326,7 @@ fn sync_system_prompt_message(messages: &mut Vec<ChatMessage>, system_prompt: &s
     }
 }
 
-fn autosave_session_snapshot(
-    messages: &[ChatMessage],
-    app_config: &config::AppConfig,
-    exec_mode: &str,
-    ui_mode: &str,
-) -> Result<std::path::PathBuf, String> {
-    session::save_latest(&app_config.model_name, exec_mode, ui_mode, messages)
-}
+
 
 fn chat_max_tokens() -> usize {
     std::env::var("HELIX_CHAT_MAX_TOKENS")
@@ -761,32 +754,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exec_mode
         )));
 
-        let resume_requested = std::env::var("HELIX_RESUME_SESSION")
-            .ok()
-            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "y"))
-            .unwrap_or(false);
-
-        if resume_requested {
-            match session::load_latest() {
-                Ok(saved) => {
-                    messages = saved.messages;
-                    sync_system_prompt_message(&mut messages, &system_prompt);
-                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                        "[Session] Resumed latest autosave.".to_string(),
-                    ));
-                }
-                Err(err) => {
-                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                        "[Session] Resume failed: {}",
-                        err
-                    )));
-                }
-            }
-        } else if session::has_latest() {
-            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                "[Session] Autosave detected. Use `/resume` to restore it.".to_string(),
-            ));
-        }
+        
 
         // If there's an initial prompt, send it immediately
         if let Some(prompt) = initial_prompt.take() {
@@ -797,7 +765,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tool_call_id: None,
                 name: None,
             });
-            let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+            
             // Process the initial prompt through the LLM loop
             run_llm_loop_tui(
                 &client,
@@ -818,7 +786,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tool_runtime.clone(),
             )
             .await;
-            let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+            
             if eval_mode {
                 return Ok(());
             }
@@ -835,7 +803,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tool_call_id: None,
                         name: None,
                     });
-                    let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+                    
                     run_llm_loop_tui(
                         &client,
                         &url,
@@ -855,10 +823,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tool_runtime.clone(),
                     )
                     .await;
-                    let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+                    
                 }
                 Some(tui::TuiAction::Quit) | None => {
-                    let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
+                    
                     break;
                 }
                 Some(tui::TuiAction::Interrupt) => {
@@ -889,88 +857,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             exec_mode: exec_mode.clone(),
                             connection: tui_connection_state.clone(),
                         });
-                        let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
-                    } else if c.starts_with("/save") {
-                        let parts: Vec<&str> = c.split_whitespace().collect();
-                        let save_result = if parts.len() > 1 {
-                            session::save_named(
-                                parts[1],
-                                &app_config.model_name,
-                                &exec_mode,
-                                &ui_mode,
-                                &messages,
-                            )
-                        } else {
-                            session::save_latest(&app_config.model_name, &exec_mode, &ui_mode, &messages)
-                        };
-
-                        match save_result {
-                            Ok(path) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                                    "[Session] Saved to {}",
-                                    path.display()
-                                )));
-                            }
-                            Err(err) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                                    "[Session] Save failed: {}",
-                                    err
-                                )));
-                            }
-                        }
-                    } else if c.starts_with("/load") {
-                        let parts: Vec<&str> = c.split_whitespace().collect();
-                        if parts.len() < 2 {
-                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                                "[Session] Usage: /load <name>".to_string(),
-                            ));
-                            continue;
-                        }
-
-                        match session::load_named(parts[1]) {
-                            Ok(saved) => {
-                                messages = saved.messages;
-                                sync_system_prompt_message(&mut messages, &system_prompt);
-                                let current_tokens = tokens::count_message_tokens(&messages);
-                                let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
-                                    current_tokens,
-                                    app_config.context_size,
-                                ));
-                                let _ = event_tx.send(tui::TuiEvent::ClearHistory);
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                                    "[Session] Loaded session '{}'",
-                                    parts[1]
-                                )));
-                            }
-                            Err(err) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                                    "[Session] Load failed: {}",
-                                    err
-                                )));
-                            }
-                        }
-                    } else if c == "/resume" {
-                        match session::load_latest() {
-                            Ok(saved) => {
-                                messages = saved.messages;
-                                sync_system_prompt_message(&mut messages, &system_prompt);
-                                let current_tokens = tokens::count_message_tokens(&messages);
-                                let _ = event_tx.send(tui::TuiEvent::ContextUpdate(
-                                    current_tokens,
-                                    app_config.context_size,
-                                ));
-                                let _ = event_tx.send(tui::TuiEvent::ClearHistory);
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(
-                                    "[Session] Resumed latest autosave.".to_string(),
-                                ));
-                            }
-                            Err(err) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!(
-                                    "[Session] Resume failed: {}",
-                                    err
-                                )));
-                            }
-                        }
+                        
                     } else if c.starts_with("/mode") {
                         let parts: Vec<&str> = c.split_whitespace().collect();
 
@@ -1048,41 +935,134 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "[Mode] Switched to {} mode.",
                             exec_mode
                         )));
-                        let _ = autosave_session_snapshot(&messages, &app_config, &exec_mode, &ui_mode);
-                    } else if c.starts_with("/gsd plan") {
-                        let _ = event_tx.send(tui::TuiEvent::SystemMessage("[GSD] Planning new phase...".to_string()));
-                        match agent_rs::agent_core::orchestration::advance_phase(
-                            agent_rs::agent_core::orchestration::phase_state::Phase::Plan,
-                            4,
-                            "gsd-test",
-                            "Current OS state snapshot...".to_string(),
-                            serde_json::json!({}),
-                            Some(tool_runtime.clone()),
-                            None,
-                        ).await {
-                            Ok(outcome) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                        
+                    } else if c.starts_with("/gsd") {
+                        let parts: Vec<&str> = c.split_whitespace().collect();
+                        let cmd_raw = parts[0];
+
+                        if cmd_raw == "/gsd" {
+                            if parts.len() < 2 {
+                                 let _ = event_tx.send(tui::TuiEvent::SystemMessage("[GSD] Usage: /gsd <discover|discuss|plan|execute|verify|close> [goal]".to_string()));
+                            } else {
+                                let phase_str = parts[1];
+                                let goal = parts[2..].join(" ");
+                                let phase_goal = if goal.is_empty() { "General project refinement" } else { &goal };
+                                
+                                let phase = match phase_str {
+                                    "discover" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discover),
+                                    "discuss" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discuss),
+                                    "plan" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Plan),
+                                    "execute" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Execute),
+                                    "verify" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Verify),
+                                    "close" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Close),
+                                    _ => None,
+                                };
+
+                                if let Some(p) = phase {
+                                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Orchestrating {} phase...", phase_str)));
+                                    match agent_rs::agent_core::orchestration::advance_phase(
+                                        p,
+                                        1, // hardcoded phase number for MVP
+                                        "gsd-integration",
+                                        format!("User requested {} via slash command. Goal: {}", phase_str, phase_goal),
+                                        serde_json::json!({}),
+                                        Some(tool_runtime.clone()),
+                                        None,
+                                    ).await {
+                                        Ok(outcome) => {
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Artifact: {}", outcome.artifact_path)));
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                                        }
+                                        Err(e) => {
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                                        }
+                                    }
+                                } else {
+                                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Unknown phase: {}", phase_str)));
+                                }
                             }
-                            Err(e) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
-                            }
-                        }
-                    } else if c == "/gsd execute" {
-                        let _ = event_tx.send(tui::TuiEvent::SystemMessage("[GSD] Executing phase...".to_string()));
-                        match agent_rs::agent_core::orchestration::advance_phase(
-                            agent_rs::agent_core::orchestration::phase_state::Phase::Execute,
-                            4,
-                            "gsd-test",
-                            "Current OS state snapshot...".to_string(),
-                            serde_json::json!({}),
-                            Some(tool_runtime.clone()),
-                            None,
-                        ).await {
-                            Ok(outcome) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
-                            }
-                            Err(e) => {
-                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                        } else if cmd_raw.starts_with("/gsd-") {
+                            let subcmd = cmd_raw.trim_start_matches("/gsd-");
+                            match subcmd {
+                                "next" | "progress" | "stats" | "health" => {
+                                    let sdk_cmd = match subcmd {
+                                        "next" | "progress" | "stats" | "health" => "auto",
+                                        _ => subcmd,
+                                    };
+                                    let output = std::process::Command::new("gsd-sdk")
+                                        .arg(sdk_cmd)
+                                        .arg("--model")
+                                        .arg(&app_config.model_name)
+                                        .output();
+                                    match output {
+                                        Ok(o) => {
+                                            let combined = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(combined));
+                                        }
+                                        Err(e) => {
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] Failed to run gsd-sdk: {}", e)));
+                                        }
+                                    }
+                                }
+                                "plan-phase" | "execute-phase" | "discuss-phase" | "verify-work" | "ship" => {
+                                    let phase_num = parts.get(1).and_then(|s| s.parse::<u8>().ok()).unwrap_or(1);
+                                    let goal = parts.get(2..).map(|s| s.join(" ")).unwrap_or_else(|| "General project refinement".to_string());
+                                    
+                                    let phase = match subcmd {
+                                        "discuss-phase" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discuss),
+                                        "plan-phase" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Plan),
+                                        "execute-phase" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Execute),
+                                        "verify-work" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Verify),
+                                        "ship" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Close),
+                                        _ => None,
+                                    };
+                                    
+                                    if let Some(p) = phase {
+                                         let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Orchestrating phase {} for phase number {}...", subcmd, phase_num)));
+                                         match agent_rs::agent_core::orchestration::advance_phase(
+                                            p,
+                                            phase_num,
+                                            "gsd-integration",
+                                            format!("User requested {} via slash command. Goal: {}", subcmd, goal),
+                                            serde_json::json!({}),
+                                            Some(tool_runtime.clone()),
+                                            None,
+                                        ).await {
+                                            Ok(outcome) => {
+                                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Artifact: {}", outcome.artifact_path)));
+                                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                                            }
+                                            Err(e) => {
+                                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                                            }
+                                        }
+                                    }
+                                }
+                                "map-codebase" | "new-project" => {
+                                     let args: Vec<&str> = parts[1..].to_vec();
+                                     let sdk_cmd = match subcmd {
+                                         "new-project" => "init",
+                                         _ => "auto",
+                                     };
+                                     let output = std::process::Command::new("gsd-sdk")
+                                        .arg(sdk_cmd)
+                                        .args(&args)
+                                        .arg("--model")
+                                        .arg(&app_config.model_name)
+                                        .output();
+                                     match output {
+                                        Ok(o) => {
+                                            let combined = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(combined));
+                                        }
+                                        Err(e) => {
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] Failed to run gsd-sdk: {}", e)));
+                                        }
+                                     }
+                                }
+                                _ => {
+                                     let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Unknown command: {}", cmd_raw)));
+                                }
                             }
                         }
                     } else {
@@ -2058,7 +2038,7 @@ async fn run_llm_loop_tui(
 
                     let req = ToolRequest {
                         call_id: id,
-                        name: func_name,
+                        name: func_name.clone(),
                         arguments: parsed_args,
                         confidence: 1.0,
                     };
@@ -2074,15 +2054,29 @@ async fn run_llm_loop_tui(
                     let registry_owned = registry.clone();
                     
                     let (_event_tx_inner, mut event_rx_inner) = tokio::sync::mpsc::unbounded_channel::<ToolLifecycle>();
-                    let _event_tx_outer = event_tx.clone();
+                    let event_tx_outer = event_tx.clone();
+                    let func_name_for_spawn = func_name.clone();
                     
                     // Forward lifecycle events to TUI
                     tokio::spawn(async move {
                         while let Some(ev) = event_rx_inner.recv().await {
-                            if let ToolLifecycle::Start { name: _name, id: _ } = ev {
-                                // Need arguments for ToolInfo but ToolLifecycle doesn't carry them yet.
-                                // Actually, we can just send ToolStart here if we had arguments.
-                                // Let's stick to the core plan of using ToolRuntime.
+                            match ev {
+                                ToolLifecycle::Start { name, id } => {
+                                    let _ = event_tx_outer.send(tui::TuiEvent::ToolStart(tui::ToolInfo {
+                                        name,
+                                        arguments: id, // Fallback as arguments aren't in Start yet
+                                    }));
+                                }
+                                ToolLifecycle::Status { id: _, message: _ } => {
+                                    // Status updates can be ignored or handled if UI supports them
+                                }
+                                ToolLifecycle::Result { id: _, success, output_summary } => {
+                                    let _ = event_tx_outer.send(tui::TuiEvent::ToolResult(tui::ToolResultInfo {
+                                        name: func_name_for_spawn.clone(),
+                                        output: output_summary,
+                                        success,
+                                    }));
+                                }
                             }
                         }
                     });
@@ -2100,49 +2094,27 @@ async fn run_llm_loop_tui(
                                 audit_store_owned,
                                 "terminal".to_string(),
                                 registry_owned,
-                                None, // We handle TUI events manually below for now to preserve arguments
+                                None, // We handle TUI events manually above for now to preserve arguments
                             ).await,
                         )
                     }
                 })
                 .collect();
 
-            // PRE-EMIT Start events to keep TUI responsive (retaining existing behavior)
-            for tc in tool_calls {
-                let func_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                let args_value = &tc["function"]["arguments"];
-                let parsed_args = if let Some(raw_str) = args_value.as_str() {
-                    serde_json::from_str::<Value>(raw_str).unwrap_or(json!({}))
-                } else if args_value.is_object() {
-                    args_value.clone()
-                } else {
-                    json!({})
-                };
-                let _ = event_tx.send(tui::TuiEvent::ToolStart(tui::ToolInfo {
-                    name: func_name.clone(),
-                    arguments: parsed_args.to_string(),
-                }));
-            }
-
             let mut results = join_all(tasks).await;
-
-            // Sort by original index to maintain call order (D-04)
             results.sort_by_key(|(idx, _)| *idx);
 
-            // Process results in original order (TOOL-03, TOOL-04)
             let mut critic_injections: Vec<ChatMessage> = Vec::new();
             for (_original_idx, (id, tool_result, func_name)) in results.into_iter() {
-                // Emit ToolResult event after completion (TOOL-02, TOOL-03)
                 let _ = event_tx.send(tui::TuiEvent::ToolResult(tui::ToolResultInfo {
                     name: func_name.clone(),
                     output: tool_result.output.clone(),
                     success: tool_result.success,
                 }));
 
-                // Handle critic injections for failed tools
                 if !tool_result.success && func_name == "run_terminal_command" {
                     critic_injections.push(critic_message(
-                        "The previous command failed. Analyze the error output above carefully. Correct your approach and retry now. Do NOT repeat the same command."
+                        "The previous command failed. Analyze the error output carefully. Correct your approach and retry now."
                     ));
                     temperature_override = if server_flavor == ServerFlavor::KoboldCpp {
                         0.2
@@ -2151,13 +2123,6 @@ async fn run_llm_loop_tui(
                     };
                 }
 
-                if tool_result.success && func_name == "write_file" {
-                    critic_injections.push(critic_message(
-                        "File was written. You MUST now verify it is correct: use the read_file tool to read back the file you just wrote before continuing to the next step."
-                    ));
-                }
-
-                // Inject ChatMessage with role "tool" (TOOL-03)
                 messages.push(ChatMessage {
                     role: "tool".to_string(),
                     content: Some(tool_result.output),
@@ -2171,156 +2136,4 @@ async fn run_llm_loop_tui(
             break;
         }
     }
-
-    let _ = event_tx.send(tui::TuiEvent::Status("Ready".to_string()));
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        extract_stream_tool_calls, extract_visible_delta_text, extract_visible_stream_choice_text,
-        format_visible_output,
- should_replay_final_content,
-        should_retry_non_stream_after_stream_error, system_prompt_for_mode,
-    };
-    use serde_json::json;
-    use tokio::sync::mpsc;
-
-    fn test_app_config() -> crate::config::AppConfig {
-        crate::config::AppConfig {
-            base_url: "http://127.0.0.1:8080/v1".to_string(),
-            model_name: "test-model".to_string(),
-            context_size: 8192,
-            require_confirmation: true,
-            dangerous_commands: vec![],
-            exec_mode: "chat".to_string(),
-            chat_system_prompt: "chat-prompt".to_string(),
-            agentic_system_prompt: "agentic-prompt".to_string(),
-            tool_permission_tier: "workspace_write".to_string(),
-            audit_enabled: true,
-            audit_db_path: "logs/audit.db".to_string(),
-            permission_tier: crate::security::policy::PermissionTier::WorkspaceWrite,
-        }
-    }
-
-    #[test]
-    fn extracts_non_content_visible_text() {
-        let delta = json!({"reasoning_content": "hello-from-reasoning"});
-        assert_eq!(
-            extract_visible_delta_text(&delta, false),
-            Some(("hello-from-reasoning".to_string(), true))
-        );
-    }
-
-    #[test]
-    fn chat_mode_marks_reasoning_content_chunks() {
-        let delta = json!({"reasoning_content": "hidden"});
-        assert_eq!(
-            extract_visible_delta_text(&delta, true),
-            Some(("hidden".to_string(), true))
-        );
-    }
-
-    #[test]
-    fn prefers_content_over_other_fields() {
-        let delta = json!({"content": "primary", "text": "secondary"});
-        assert_eq!(
-            extract_visible_delta_text(&delta, true),
-            Some(("primary".to_string(), false))
-        );
-    }
-
-    #[test]
-    fn extracts_choice_text_when_delta_is_missing() {
-        let choice = json!({"text": "plain-choice-text"});
-        assert_eq!(
-            extract_visible_stream_choice_text(&choice, false),
-            Some(("plain-choice-text".to_string(), false))
-        );
-    }
-
-    #[test]
-    fn extracts_message_content_when_choice_uses_message_shape() {
-        let choice = json!({"message": {"content": "message-content"}});
-        assert_eq!(
-            extract_visible_stream_choice_text(&choice, false),
-            Some(("message-content".to_string(), false))
-        );
-    }
-
-    #[test]
-    fn extracts_tool_calls_from_choice_message_when_delta_missing() {
-        let choice = json!({
-            "message": {
-                "tool_calls": [
-                    {
-                        "index": 0,
-                        "id": "call_1",
-                        "function": { "name": "list_directory", "arguments": "{}" }
-                    }
-                ]
-            }
-        });
-
-        let tool_calls = extract_stream_tool_calls(&choice).expect("expected tool calls");
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0]["id"], json!("call_1"));
-    }
-
-    #[test]
-    fn format_visible_output_has_non_empty_chat_fallback() {
-        let input = "<think>hidden</think>";
-        assert!(!format_visible_output(input, true).trim().is_empty());
-    }
-
-
-    #[test]
-    fn format_visible_output_strips_reasoning_in_chat_mode() {
-        let input = "hello <think>hidden</think> world";
-        assert_eq!(format_visible_output(input, true), "hello  world");
-    }
-
-    #[test]
-    fn format_visible_output_exposes_reasoning_in_agentic_mode() {
-        let input = "a <think>work</think> b";
-        assert!(format_visible_output(input, false).contains("<thinking>"));
-    }
-
-    #[test]
-    fn retries_non_stream_only_when_no_stream_content_or_tools_exist() {
-        assert!(should_retry_non_stream_after_stream_error("", 0));
-        assert!(!should_retry_non_stream_after_stream_error("partial", 0));
-        assert!(!should_retry_non_stream_after_stream_error("", 1));
-    }
-
-    #[test]
-    fn does_not_replay_final_content_after_stream_started() {
-        assert!(!should_replay_final_content(true, Some("hello")));
-    }
-
-    #[test]
-    fn replays_final_content_only_for_non_stream_recovery_case() {
-        assert!(should_replay_final_content(false, Some("hello")));
-        assert!(!should_replay_final_content(false, Some("")));
-        assert!(!should_replay_final_content(false, None));
-    }
-
-    #[test]
-    fn system_prompt_uses_chat_prompt_for_chat_mode() {
-        let app_config = test_app_config();
-        assert_eq!(
-            system_prompt_for_mode("chat", "os_assistant", &app_config),
-            "chat-prompt"
-        );
-    }
-
-    #[test]
-    fn system_prompt_uses_configured_agentic_prompt_for_default_persona() {
-        let app_config = test_app_config();
-        assert_eq!(
-            system_prompt_for_mode("agentic", "os_assistant", &app_config),
-            "agentic-prompt"
-        );
-    }
-}
-

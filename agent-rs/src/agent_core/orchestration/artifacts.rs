@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,35 +61,34 @@ pub async fn load_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir_in;
-    use std::env;
 
     #[tokio::test]
     async fn test_save_and_load_artifact() {
-        // Change current dir to a temporary dir for testing so we don't pollute real .planning
-        let temp_dir = tempdir_in(env::temp_dir()).unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
-
         let artifact = PhaseArtifact::Plan {
             summary: "Test plan".to_string(),
             tasks: vec!["Task 1".to_string(), "Task 2".to_string()],
         };
 
-        let result = save_artifact(4, "test-slug", "plan.json", &artifact).await;
+        // Use a unique dummy phase number for this test to avoid conflicts
+        let phase_num = 99;
+        let slug = "test-slug-save-load";
+
+        let result = save_artifact(phase_num, slug, "plan.json", &artifact).await;
         assert!(result.is_ok(), "Should save artifact successfully");
 
-        let loaded = load_artifact(4, "test-slug", "plan.json").await.unwrap();
+        let loaded = load_artifact(phase_num, slug, "plan.json").await.unwrap();
         assert_eq!(artifact, loaded);
 
-        // Cleanup isn't strictly necessary since tempdir drops, but we reset CWD anyway
+        // Cleanup
+        let _ = fs::remove_dir_all(get_phase_dir(phase_num, slug)).await;
     }
 
     #[tokio::test]
     async fn test_load_nonexistent() {
-        let temp_dir = tempdir_in(env::temp_dir()).unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
+        let phase_num = 98;
+        let slug = "missing-test";
 
-        let result = load_artifact(99, "missing", "none.json").await;
+        let result = load_artifact(phase_num, slug, "none.json").await;
         assert!(result.is_err(), "Should return error for missing file");
     }
 }

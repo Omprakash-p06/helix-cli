@@ -119,10 +119,6 @@ else:
 profile = onboarding_profile.update_profile(profile, selected_model_name, interface_choice, exec_mode)
 onboarding_profile.save_profile(profile)
 
-resume_session = False
-if interface_choice == "tui" and onboarding_profile.has_latest_session():
-    resume_session = ask_yes_no("Resume previous autosaved session?", default_yes=True)
-
 
 # 1. Clean orphaned GPU processes guarantees VRAM is empty
 def clean_orphaned_servers():
@@ -233,8 +229,6 @@ print()
 print(f"Model:     {selected_model_name}")
 print(f"Interface: {interface_choice.capitalize()}")
 print(f"Mode:      {exec_mode.capitalize()}")
-if resume_session:
-    print("Resume:    Enabled (latest autosave)")
 
 print("\n  Handing over to Orchestrator...")
 time.sleep(0.5)
@@ -245,8 +239,6 @@ try:
     agent_env = os.environ.copy()
     agent_env["HELIX_EXEC_MODE"] = exec_mode
     agent_env["HELIX_UI_MODE"] = interface_choice
-    if resume_session:
-        agent_env["HELIX_RESUME_SESSION"] = "1"
 
     if interface_choice == "web":
         print("  [i] Booting Rust API and Vite Dev Server...")

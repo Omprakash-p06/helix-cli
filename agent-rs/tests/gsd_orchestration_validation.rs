@@ -1,8 +1,10 @@
 use agent_rs::agent_core::orchestration::artifacts::{load_artifact, PhaseArtifact};
 use agent_rs::agent_core::orchestration::context_reset::ContextResetter;
 use agent_rs::agent_core::orchestration::phase_state::{Phase, PhaseStateMachine};
-use agent_rs::agent_core::orchestration::recovery::{RecoveryDecisionMatrix, RecoveryAction, LoopDetector};
-use agent_rs::agent_core::orchestration::{advance_phase, PhaseOutcome};
+use agent_rs::agent_core::orchestration::recovery::{RecoveryDecisionMatrix, RecoveryAction};
+use agent_rs::agent_core::orchestration::advance_phase;
+use agent_rs::tui::commands::{default_commands, execute_command, Command, CommandCategory};
+use agent_rs::tui::TuiAction;
 use agent_rs::audit::AuditStore;
 use serde_json::json;
 use std::env;
@@ -18,7 +20,7 @@ async fn test_full_flow_integration() {
     let system_state = "OS: Linux, Error: Permission denied".to_string();
 
     let mut current_phase = Phase::Discover;
-    let mut phase_number = 1;
+    let phase_number = 1;
 
     // Simulate Discover -> Discuss -> Plan -> Execute -> Verify -> Close
     while current_phase != Phase::Close {
@@ -160,4 +162,50 @@ async fn test_protocol_validation() {
     
     assert!(prompt.contains("Task X"));
     assert!(prompt.contains("Plan summary"));
+}
+
+#[test]
+fn test_gsd_slash_commands_are_available_in_default_commands() {
+    let commands = default_commands();
+    assert!(
+        commands.iter().any(|c| c.id == "gsd_plan_phase" && c.name == "/gsd-plan-phase"),
+        "missing gsd_plan_phase command from default command list"
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|c| c.id == "gsd_execute_phase" && c.name == "/gsd-execute-phase"),
+        "missing gsd_execute_phase command from default command list"
+    );
+}
+
+#[test]
+fn test_gsd_slash_commands_dispatch_contract() {
+    let gsd_plan = Command {
+        id: "gsd_plan".to_string(),
+        name: "/gsd plan".to_string(),
+        description: "Plan a new GSD phase".to_string(),
+        example: "/gsd plan \"fix network\"".to_string(),
+        shortcut: None,
+        category: CommandCategory::Mode,
+        immediate: false,
+    };
+    assert!(matches!(
+        execute_command(&gsd_plan),
+        Some(TuiAction::SystemCommand(cmd)) if cmd == "/gsd plan"
+    ));
+
+    let gsd_execute = Command {
+        id: "gsd_execute".to_string(),
+        name: "/gsd execute".to_string(),
+        description: "Execute the active GSD phase".to_string(),
+        example: "/gsd execute".to_string(),
+        shortcut: None,
+        category: CommandCategory::Mode,
+        immediate: true,
+    };
+    assert!(matches!(
+        execute_command(&gsd_execute),
+        Some(TuiAction::SystemCommand(cmd)) if cmd == "/gsd execute"
+    ));
 }

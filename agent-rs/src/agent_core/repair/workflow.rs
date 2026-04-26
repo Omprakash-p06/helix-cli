@@ -55,9 +55,11 @@ mod tests {
         
         // Create a dummy file to backup
         let file_path = source_dir.path().join("test.txt");
-        let mut file = std::fs::File::create(&file_path).unwrap();
-        use std::io::Write;
-        writeln!(file, "Hello, world!").unwrap();
+        {
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            use std::io::Write;
+            writeln!(file, "Original content").unwrap();
+        }
 
         let manager = Arc::new(SnapshotManager::with_sources(
             backup_dir.path().to_path_buf(),
@@ -65,9 +67,13 @@ mod tests {
         ));
         let safety_loop = SafetyLoop::new(manager);
 
-        let execution = || ToolResult {
-            success: true,
-            output: "Modified something".to_string(),
+        let file_path_clone = file_path.clone();
+        let execution = move || {
+            std::fs::write(&file_path_clone, "Modified content").unwrap();
+            ToolResult {
+                success: true,
+                output: "Modified something".to_string(),
+            }
         };
 
         // Validation fails
@@ -77,6 +83,10 @@ mod tests {
         
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("system rolled back"));
+
+        // Verify content was rolled back
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content.trim(), "Original content");
     }
 
     #[test]

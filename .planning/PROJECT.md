@@ -1,10 +1,10 @@
 # Project: Helix OS Agent — Autonomous Local Troubleshooting Stack
 
 ## Vision
-Helix OS Agent is a local-first, autonomous AI system administrator designed to troubleshoot, diagnose, and repair operating system issues entirely on consumer hardware. Powered by Qwen 3.6 and orchestrated by GSD 2.0, it provides a privacy-first, secure, and verifiable alternative to cloud-based system management tools.
+Helix OS Agent is a local-first, autonomous AI system administrator designed to troubleshoot, diagnose, and repair operating system issues entirely on consumer hardware. It is a **multi-model orchestrator** capable of running any local LLM (GGUF) provided in the `models/` folder or downloaded from Hugging Face. Orchestrated by GSD 2.0, it provides a privacy-first, secure, and verifiable alternative to cloud-based system management tools.
 
 ## Core Value
-**Safety, Autonomy, and Privacy.** Helix OS Agent bridges the gap between local AI capabilities and real-world system administration by enforcing a multi-layer security framework (Sandboxing, Policy Enforcement, Audit Logging) while delivering state-of-the-art agentic performance on strictly local hardware.
+**Safety, Autonomy, and Privacy.** Helix OS Agent bridges the gap between local AI capabilities and real-world system administration by enforcing a multi-layer security framework (Sandboxing, Policy Enforcement, Audit Logging) while delivering state-of-the-art agentic performance on strictly local hardware, regardless of the underlying model.
 
 ## What This Is
 A defense-in-depth AI orchestrator combining a high-performance Rust core (`agent-rs`) with an isolated execution sandbox. It utilizes the GSD 2.0 protocol to manage complex, multi-step troubleshooting workflows, ensuring every action is planned, verified, and auditable.
@@ -13,24 +13,30 @@ A defense-in-depth AI orchestrator combining a high-performance Rust core (`agen
 
 ## Current Milestone: v2.0 Helix OS Agent Pivot
 
-**Goal:** Transform the general-purpose coding assistant into a specialized OS troubleshooting agent with a robust security foundation.
+**Goal:** Transform the general-purpose coding assistant into a specialized, multi-model OS troubleshooting agent with a robust security foundation.
 
 **Target features:**
-- Qwen 3.6 integration (27B/35B MoE) for superior terminal task performance.
-- Docker/MicroVM execution sandboxing for all agent operations.
-- Command canonicalization and strict allowlist policy engine.
-- GSD 2.0 Pi SDK integration for autonomous orchestration.
-- Human-in-the-loop approval gates for system modifications.
-- Immutable, append-only audit logging for compliance and forensics.
+- **Dynamic Model Selection:** Automatically detect and allow users to choose from any model in the `models/` directory.
+- **Hugging Face Integration:** Download any compatible GGUF model directly into the local environment.
+- **Docker/MicroVM Sandboxing:** Isolated execution for all agent operations.
+- **GSD 2.0 Pi SDK Integration:** Autonomous orchestration and UI-level command suggestions (autofill).
+- **Human-in-the-loop Approval:** Safety gates for all system modifications.
+- **Immutable Audit Logging:** Append-only logs for compliance and forensics.
 
 ---
 
-## Completed Milestones (Legacy Helix Agent)
+## Completed Milestones (Legacy & Foundation)
 
 ### v1.1 Operational Upgrades
 - ✓ Built TUI foundation with ratatui and rich input (Phases 10-14)
 - ✓ Implemented streaming and control feedback (Phases 11-12)
 - ✓ Grammar-enforced tool calling foundation (Phase 3)
+
+### v2.0 Pivot Progress
+- ✓ Phase 01: Multi-model foundation loader and security sandbox.
+- ✓ Phase 02: Cross-platform OS diagnostics and DRL engine.
+- ✓ Phase 03: HITL safety gates and transactional repairs.
+- ✓ Phase 04: GSD 2.0 orchestration and recovery operators.
 
 ---
 
@@ -43,24 +49,12 @@ A defense-in-depth AI orchestrator combining a high-performance Rust core (`agen
 - ✓ Deterministic Grammar-Enforced Tool Calling (GBNF)
 - ✓ Multi-mode execution (Agentic / Chat)
 
-### Active (Pivot Phase 01)
+### Active (Pivot Hardening)
 
-- [ ] **SEC-01 (Execution Sandbox):** Build Docker/MicroVM wrapper for all agent commands.
-- [ ] **SEC-02 (Policy Engine):** Implement command canonicalization and strict allowlist.
-- [ ] **SEC-03 (Audit Log):** Implement append-only immutable audit logging.
-- [ ] **MOD-01 (Qwen 3.6):** Integrate Qwen 3.6 tiered model loading via llama.cpp.
-
-### Active (Pivot Phase 02-03)
-
-- [ ] **DIAG-01 (OS Introspection):** Cross-platform log readers and system state tools.
-- [ ] **FIX-01 (Approval Gate):** Mandatory "Ask-for-Permission" flow for repair actions.
-- [ ] **FIX-02 (Rollback):** Pre-repair filesystem/state snapshots.
-
-### Active (Pivot Phase 04-05)
-
-- [ ] **GSD-01 (Orchestration):** GSD 2.0 Pi SDK integration for multi-phase planning.
-- [ ] **GSD-02 (Autonomous Recovery):** RETRY/DECOMPOSE/PRUNE logic for failed tasks.
-- [ ] **SEC-04 (Guardian):** Multi-agent voting consensus for high-risk actions.
+- [ ] **MOD-02 (Model Management):** Dynamic model discovery and selection UI.
+- [ ] **MOD-03 (HF Downloader):** Tool for downloading models from Hugging Face.
+- [ ] **UX-01 (GSD Autofill):** Automatic GSD command suggestions in the input field.
+- [ ] **SEC-05 (Blocklist):** Hardcoded non-bypassable destructive command blocklist.
 
 ---
 
@@ -68,10 +62,10 @@ A defense-in-depth AI orchestrator combining a high-performance Rust core (`agen
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Qwen 3.6 Foundation | Matches/exceeds cloud models on Terminal-Bench 2.0 while fitting on consumer VRAM. | Strategic Foundation |
+| Multi-Model Support | Vision is tool-centric, not model-centric. Users should use the best local model for their hardware. | Strategic Pivot |
 | GSD 2.0 Orchestration | Provides autonomous error recovery, context reset, and verifiable outcomes. | Orchestration Standard |
 | Sandbox-First Security | AI agents with shell access are a security nightmare; architectural boundaries must exist. | Non-negotiable Requirement |
 | Local-First Privacy | OS troubleshooting involves sensitive logs and system state; cloud APIs are a privacy risk. | Core Value |
 
 ---
-*Last updated: 2026-04-24 — Pivot to Helix OS Agent initiated*
+*Last updated: 2026-04-26 — Generalized to multi-model vision and removed persistent sessions.*

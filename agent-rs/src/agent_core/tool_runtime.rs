@@ -342,3 +342,171 @@ impl ToolRuntime {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::security::policy::{PermissionTier, PolicyContext};
+    use crate::types::{PermissionRequest, PermissionResponse, PermissionRequester};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use serde_json::json;
+
+    struct MockRequester {
+        response: PermissionResponse,
+        called: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl PermissionRequester for MockRequester {
+        async fn request_permission(&self, _request: PermissionRequest) -> PermissionResponse {
+            self.called.store(true, Ordering::SeqCst);
+            self.response.clone()
+        }
+    }
+
+    #[test]
+    fn test_hitl_interception_approve() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let handle = rt.handle().clone();
+
+        let requester = Arc::new(MockRequester { 
+            response: PermissionResponse::Allow,
+            called: AtomicBool::new(false),
+        });
+        let runtime = ToolRuntime::new(Some(requester.clone()), None);
+        
+        let req = ToolRequest {
+            call_id: "test".to_string(),
+            name: "run_terminal_command".to_string(),
+            arguments: json!({"command": "chmod +x script.sh"}),
+            confidence: 0.9,
+        };
+
+        let ctx = PolicyContext {
+            permission_tier: PermissionTier::FullExec,
+            exec_mode: "test".to_string(),
+            workspace_root: std::env::temp_dir(),
+        };
+
+        let registry = Arc::new(ToolRegistry::new());
+        
+        let handle_clone = handle.clone();
+        let _result = std::thread::spawn(move || {
+            let _guard = handle_clone.enter();
+            runtime.execute_sync(
+                req,
+                &[],
+                false,
+                &ctx,
+                None,
+                "test_path",
+                &registry,
+            )
+        }).join().unwrap();
+
+        assert!(requester.called.load(Ordering::SeqCst), "Requester should have been called");
+    }
+
+    #[test]
+    fn test_hitl_interception_deny() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let handle = rt.handle().clone();
+
+        let requester = Arc::new(MockRequester { 
+            response: PermissionResponse::Deny,
+            called: AtomicBool::new(false),
+        });
+        let runtime = ToolRuntime::new(Some(requester.clone()), None);
+        
+        let req = ToolRequest {
+            call_id: "test".to_string(),
+            name: "run_terminal_command".to_string(),
+            arguments: json!({"command": "chmod +x script.sh"}),
+            confidence: 0.9,
+        };
+
+        let ctx = PolicyContext {
+            permission_tier: PermissionTier::FullExec,
+            exec_mode: "test".to_string(),
+            workspace_root: std::env::temp_dir(),
+        };
+
+        let registry = Arc::new(ToolRegistry::new());
+        
+        let handle_clone = handle.clone();
+        let result = std::thread::spawn(move || {
+            let _guard = handle_clone.enter();
+            runtime.execute_sync(
+                req,
+                &[],
+                false,
+                &ctx,
+                None,
+                "test_path",
+                &registry,
+            )
+        }).join().unwrap();
+
+        assert!(requester.called.load(Ordering::SeqCst), "Requester should have been called");
+        assert!(!result.success);
+        assert!(result.output.contains("Execution denied by user"));
+    }
+
+    #[test]
+    fn test_low_confidence_warning_injection() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let handle = rt.handle().clone();
+
+        struct WarningRequester {
+            captured_reason: std::sync::Mutex<String>,
+        }
+
+        #[async_trait::async_trait]
+        impl PermissionRequester for WarningRequester {
+            async fn request_permission(&self, request: PermissionRequest) -> PermissionResponse {
+                let mut guard = self.captured_reason.lock().unwrap();
+                *guard = request.reason;
+                PermissionResponse::Deny
+            }
+        }
+
+        let requester = Arc::new(WarningRequester { 
+            captured_reason: std::sync::Mutex::new(String::new()),
+        });
+        let runtime = ToolRuntime::new(Some(requester.clone()), None);
+        
+        let req = ToolRequest {
+            call_id: "test".to_string(),
+            name: "run_terminal_command".to_string(),
+            arguments: json!({"command": "chmod +x script.sh"}),
+            confidence: 0.7, // Below 0.8 threshold
+        };
+
+        let ctx = PolicyContext {
+            permission_tier: PermissionTier::FullExec,
+            exec_mode: "test".to_string(),
+            workspace_root: std::env::temp_dir(),
+        };
+
+        let registry = Arc::new(ToolRegistry::new());
+        
+        let handle_clone = handle.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = handle_clone.enter();
+            runtime.execute_sync(
+                req,
+                &[],
+                false,
+                &ctx,
+                None,
+                "test_path",
+                &registry,
+            )
+        }).join().unwrap();
+
+        let captured = requester.captured_reason.lock().unwrap();
+        assert!(captured.contains("LOW CONFIDENCE WARNING"), "Reason should contain warning. Captured: {}", *captured);
+        assert!(captured.contains("0.70"));
+    }
+}

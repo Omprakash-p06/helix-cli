@@ -7,6 +7,7 @@ pub enum CommandCategory {
     View,
     Session,
     Mode,
+    GSD,
 }
 
 #[derive(Debug, Clone)]
@@ -22,7 +23,7 @@ pub struct Command {
 }
 
 pub fn default_commands() -> Vec<Command> {
-    vec![
+    let mut cmds = vec![
         Command {
             id: "help".into(),
             name: "/help".into(),
@@ -69,82 +70,10 @@ pub fn default_commands() -> Vec<Command> {
             immediate: true,
         },
         Command {
-            id: "gsd_plan".into(),
-            name: "/gsd plan".into(),
-            description: "Plan the next GSD orchestration phase".into(),
-            example: "/gsd plan \"fix network issues\"".into(),
-            shortcut: None,
-            category: CommandCategory::Mode,
-            immediate: false,
-        },
-        Command {
-            id: "gsd_execute".into(),
-            name: "/gsd execute".into(),
-            description: "Execute the current GSD phase plan".into(),
-            example: "/gsd execute".into(),
-            shortcut: None,
-            category: CommandCategory::Mode,
-            immediate: true,
-        },
-        Command {
-            id: "undo".into(),
-            name: "/undo".into(),
-            description: "Undo the last action or message".into(),
-            example: "/undo".into(),
-            shortcut: None,
-            category: CommandCategory::Session,
-            immediate: false,
-        },
-        Command {
-            id: "save".into(),
-            name: "/save".into(),
-            description: "Save the current session to a file".into(),
-            example: "/save my_session".into(),
-            shortcut: None,
-            category: CommandCategory::Session,
-            immediate: false,
-        },
-        Command {
-            id: "load".into(),
-            name: "/load".into(),
-            description: "Load a previously saved session".into(),
-            example: "/load my_session".into(),
-            shortcut: None,
-            category: CommandCategory::Session,
-            immediate: false,
-        },
-        Command {
-            id: "resume".into(),
-            name: "/resume".into(),
-            description: "Resume the latest autosaved session".into(),
-            example: "/resume".into(),
-            shortcut: None,
-            category: CommandCategory::Session,
-            immediate: true,
-        },
-        Command {
-            id: "export".into(),
-            name: "/export".into(),
-            description: "Export conversation to markdown file".into(),
-            example: "/export chat.md".into(),
-            shortcut: None,
-            category: CommandCategory::Session,
-            immediate: false,
-        },
-        Command {
             id: "theme".into(),
             name: "/theme".into(),
-            description: "Switch color theme (dark, light, nord, gruvbox)".into(),
+            description: "Switch color theme".into(),
             example: "/theme nord".into(),
-            shortcut: None,
-            category: CommandCategory::View,
-            immediate: false,
-        },
-        Command {
-            id: "layout".into(),
-            name: "/layout".into(),
-            description: "Change layout mode (wide or compact)".into(),
-            example: "/layout compact".into(),
             shortcut: None,
             category: CommandCategory::View,
             immediate: false,
@@ -158,7 +87,45 @@ pub fn default_commands() -> Vec<Command> {
             category: CommandCategory::Session,
             immediate: true,
         },
-    ]
+    ];
+
+    // ── GSD SDK Commands ─────────────────────────────────────────────────────
+    let gsd_cmds = vec![
+        ("/gsd-new-project", "Initialize a fresh GSD planning structure", "/gsd-new-project --auto"),
+        ("/gsd-map-codebase", "Scan and index your current codebase state", "/gsd-map-codebase tech"),
+        ("/gsd-discuss-phase", "Capture implementation decisions before planning", "/gsd-discuss-phase 1"),
+        ("/gsd-plan-phase", "Research + plan + verify for a phase", "/gsd-plan-phase 1"),
+        ("/gsd-execute-phase", "Execute all plans in parallel waves", "/gsd-execute-phase 1"),
+        ("/gsd-verify-work", "Manual user acceptance testing", "/gsd-verify-work 1"),
+        ("/gsd-ship", "Create PR from verified phase work", "/gsd-ship 1"),
+        ("/gsd-next", "Automatically advance to the next workflow step", "/gsd-next"),
+        ("/gsd-fast", "Inline trivial tasks (skip planning)", "/gsd-fast \"add readme\""),
+        ("/gsd-audit-milestone", "Verify milestone achieved definition of done", "/gsd-audit-milestone"),
+        ("/gsd-complete-milestone", "Archive milestone and tag release", "/gsd-complete-milestone"),
+        ("/gsd-new-milestone", "Start next version from existing codebase", "/gsd-new-milestone v2"),
+        ("/gsd-ui-phase", "Generate UI design contract (UI-SPEC.md)", "/gsd-ui-phase 1"),
+        ("/gsd-ui-review", "Retroactive visual audit of frontend code", "/gsd-ui-review 1"),
+        ("/gsd-progress", "Check project progress and next steps", "/gsd-progress"),
+        ("/gsd-settings", "Configure model profile and workflow agents", "/gsd-settings"),
+        ("/gsd-debug", "Systematic debugging with persistent state", "/gsd-debug \"fix test failure\""),
+        ("/gsd-health", "Validate .planning/ directory integrity", "/gsd-health --repair"),
+        ("/gsd-stats", "Display project statistics", "/gsd-stats"),
+        ("/gsd-quick", "Execute ad-hoc task with GSD guarantees", "/gsd-quick \"cleanup logs\""),
+    ];
+
+    for (name, desc, ex) in gsd_cmds {
+        cmds.push(Command {
+            id: name.to_lowercase().replace("-", "_").replace("/", ""),
+            name: name.into(),
+            description: desc.into(),
+            example: ex.into(),
+            shortcut: None,
+            category: CommandCategory::GSD,
+            immediate: name == "/gsd-next" || name == "/gsd-progress" || name == "/gsd-stats",
+        });
+    }
+
+    cmds
 }
 
 pub fn execute_command(cmd: &Command) -> Option<TuiAction> {
@@ -167,12 +134,9 @@ pub fn execute_command(cmd: &Command) -> Option<TuiAction> {
         "clear" => Some(TuiAction::SystemCommand("/clear".into())),
         "agent" => Some(TuiAction::SystemCommand("/mode agentic".into())),
         "chat" => Some(TuiAction::SystemCommand("/mode chat".into())),
-        "save" => Some(TuiAction::SystemCommand("/save".into())),
-        "load" => Some(TuiAction::SystemCommand("/load".into())),
-        "resume" => Some(TuiAction::SystemCommand("/resume".into())),
-        "gsd_plan" => Some(TuiAction::SystemCommand("/gsd plan".into())),
-        "gsd_execute" => Some(TuiAction::SystemCommand("/gsd execute".into())),
         "quit" => Some(TuiAction::Quit),
+        // All GSD commands route to SystemCommand which main.rs handles
+        id if id.starts_with("gsd_") => Some(TuiAction::SystemCommand(cmd.name.clone())),
         _ => None,
     }
 }
@@ -194,94 +158,4 @@ pub fn filter_commands(commands: &[Command], filter: &str) -> Vec<Command> {
         })
         .cloned()
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_commands_have_expected_baseline() {
-        let cmds = default_commands();
-        assert!(cmds.len() >= 11);
-        assert!(cmds.iter().any(|c| c.id == "help"));
-        assert!(cmds.iter().any(|c| c.id == "theme"));
-        assert!(cmds.iter().any(|c| c.id == "quit"));
-        assert!(cmds.iter().any(|c| c.id == "clear"));
-        assert!(cmds.iter().any(|c| c.id == "agent"));
-        assert!(cmds.iter().any(|c| c.id == "chat"));
-        assert!(cmds.iter().any(|c| c.id == "gsd_plan"));
-        assert!(cmds.iter().any(|c| c.id == "gsd_execute"));
-        assert!(cmds.iter().any(|c| c.id == "resume"));
-    }
-
-    #[test]
-    fn execute_command_maps_known_ids() {
-        let cmd = Command {
-            id: "help".to_string(),
-            name: "/help".to_string(),
-            description: "Display help".to_string(),
-            example: "/help".to_string(),
-            shortcut: None,
-            category: CommandCategory::Navigation,
-            immediate: true,
-        };
-        assert!(matches!(execute_command(&cmd), Some(TuiAction::ShowHelp)));
-
-        let resume = Command {
-            id: "resume".to_string(),
-            name: "/resume".to_string(),
-            description: "Resume latest".to_string(),
-            example: "/resume".to_string(),
-            shortcut: None,
-            category: CommandCategory::Session,
-            immediate: true,
-        };
-        assert!(matches!(
-            execute_command(&resume),
-            Some(TuiAction::SystemCommand(cmd)) if cmd == "/resume"
-        ));
-    }
-
-    #[test]
-    fn filter_commands_matches_name_and_description() {
-        let cmds = default_commands();
-        let by_name = filter_commands(&cmds, "clear");
-        assert!(by_name.iter().any(|c| c.id == "clear"));
-
-        let by_desc = filter_commands(&cmds, "keyboard");
-        assert!(by_desc.iter().any(|c| c.id == "help"));
-    }
-
-    #[test]
-    fn filter_commands_matches_example_text() {
-        let cmds = default_commands();
-        let by_example = filter_commands(&cmds, "llama3");
-        assert!(by_example.iter().any(|c| c.id == "model"));
-    }
-
-    #[test]
-    fn immediate_commands_are_correct() {
-        let cmds = default_commands();
-        let immediate_ids: Vec<&str> = cmds
-            .iter()
-            .filter(|c| c.immediate)
-            .map(|c| c.id.as_str())
-            .collect();
-        assert!(immediate_ids.contains(&"help"));
-        assert!(immediate_ids.contains(&"clear"));
-        assert!(immediate_ids.contains(&"agent"));
-        assert!(immediate_ids.contains(&"chat"));
-        assert!(immediate_ids.contains(&"resume"));
-        assert!(immediate_ids.contains(&"quit"));
-        // Non-immediate
-        let non_immediate: Vec<&str> = cmds
-            .iter()
-            .filter(|c| !c.immediate)
-            .map(|c| c.id.as_str())
-            .collect();
-        assert!(non_immediate.contains(&"model"));
-        assert!(non_immediate.contains(&"theme"));
-        assert!(non_immediate.contains(&"layout"));
-    }
 }

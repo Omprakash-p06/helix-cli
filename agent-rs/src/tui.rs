@@ -204,6 +204,9 @@ pub struct TuiApp {
     connection_label: String,
     current_theme: state::ThemeName,
     settings: state::SettingsState,
+    // GSD state tracking
+    last_gsd_command: Option<String>,
+    command_palette: state::CommandPaletteState,
 }
 
 impl TuiApp {
@@ -242,6 +245,13 @@ impl TuiApp {
             connection_label: String::from("connecting"),
             current_theme: state::ThemeName::Dark,
             settings: state::SettingsState::new(),
+            last_gsd_command: None,
+            command_palette: state::CommandPaletteState {
+                visible: false,
+                commands: commands::default_commands(),
+                selected_index: 0,
+                filter: String::new(),
+            },
         }
     }
 
@@ -262,13 +272,38 @@ impl TuiApp {
     /// Get ghost autocomplete suggestion based on current input.
     fn ghost_suggestion(&self) -> Option<String> {
         let current = self.input.value();
+        
+        // GSD Autofill logic: suggest next phase based on last command
         if current.is_empty() {
+            if let Some(last) = &self.last_gsd_command {
+                let next = if last.starts_with("/gsd-discuss-phase") {
+                     "/gsd-plan-phase"
+                } else if last.starts_with("/gsd-plan-phase") {
+                     "/gsd-execute-phase"
+                } else if last.starts_with("/gsd-execute-phase") {
+                     "/gsd-verify-work"
+                } else if last.starts_with("/gsd-verify-work") {
+                     "/gsd-ship"
+                } else {
+                     return None;
+                };
+                return Some(next.to_string());
+            }
             return None;
         }
+
         if current.starts_with('/') {
+            // Check legacy SLASH_COMMANDS first
             for cmd in SLASH_COMMANDS {
                 if cmd.starts_with(current) && *cmd != current {
                     return Some(cmd[current.len()..].to_string());
+                }
+            }
+            // Then check dynamic registry
+            let cmds = commands::default_commands();
+            for cmd in cmds {
+                if cmd.name.starts_with(current) && cmd.name != current {
+                    return Some(cmd.name[current.len()..].to_string());
                 }
             }
         }
@@ -296,6 +331,11 @@ impl TuiApp {
 
         if trimmed.is_empty() {
             return None;
+        }
+
+        // Track GSD commands for autofill
+        if trimmed.starts_with("/gsd-") {
+            self.last_gsd_command = Some(trimmed.clone());
         }
 
         self.command_history.push(trimmed.clone());
@@ -485,6 +525,18 @@ impl TuiApp {
 
 fn draw(frame: &mut Frame, app: &mut TuiApp) {
     let size = frame.size();
+    // Update command palette state based on current input
+    let input_val = app.input.value();
+    if input_val.starts_with('/') {
+        app.command_palette.visible = true;
+        app.command_palette.filter = input_val.to_string();
+        app.command_palette.commands = commands::filter_commands(&commands::default_commands(), &app.command_palette.filter);
+        if app.command_palette.selected_index >= app.command_palette.commands.len() {
+            app.command_palette.selected_index = 0;
+        }
+    } else {
+        app.command_palette.visible = false;
+    }
 
     // Calculate dynamic input height
     let input_width_est = size.width.saturating_sub(4).max(1);
@@ -1710,6 +1762,34 @@ fn handle_key_event(
             _ => {}
         },
         InputMode::Normal => {
+            if app.command_palette.visible && !app.command_palette.commands.is_empty() {
+                match key.code {
+                    KeyCode::Up => {
+                        if app.command_palette.selected_index > 0 {
+                            app.command_palette.selected_index -= 1;
+                        } else {
+                            app.command_palette.selected_index = app.command_palette.commands.len().saturating_sub(1);
+                        }
+                        return LoopAction::Continue;
+                    }
+                    KeyCode::Down => {
+                        app.command_palette.selected_index = (app.command_palette.selected_index + 1) % app.command_palette.commands.len();
+                        return LoopAction::Continue;
+                    }
+                    KeyCode::Enter => {
+                        let cmd = app.command_palette.commands[app.command_palette.selected_index].clone();
+                        let _ = action_tx.send(TuiAction::SystemCommand(cmd.name.clone()));
+                        app.input.reset();
+                        app.command_palette.visible = false;
+                        return LoopAction::Continue;
+                    }
+                    KeyCode::Esc => {
+                        app.command_palette.visible = false;
+                        return LoopAction::Continue;
+                    }
+                    _ => {}
+                }
+            }
             match key.code {
                 // Ctrl+C = interrupt generation or quit
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {

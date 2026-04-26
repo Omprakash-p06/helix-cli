@@ -30,7 +30,11 @@ Conventions updated to reflect the pivot to Autonomous OS Troubleshooting (Helix
 - **Interactive Feedback:** Real-time visual status for tool lifecycles (Running, Completed, Failed, Blocked).
 - **Rollback Visibility:** Users must be informed when a pre-repair snapshot is taken and offered a "Undo/Rollback" option.
 
-## 6. Planning Workflow
-- **Phase Directories:** All active work resides in `.planning/phases/XX-name/`.
-- **Immutable GSD History:** Maintain an audit trail of phase transitions and plan executions.
-- **Renumbering Policy:** If phase numbers conflict, renumber chronologically during milestone cleanup.
+## 7. Model Management & Loading
+- **Model Agnosticism:** The core system must support any local GGUF model. Avoid hardcoding model-specific logic unless necessary for grammar enforcement.
+- **Dynamic Selection:** On startup, scan the `models/` directory. If multiple models are present, prompt the user for selection.
+- **HuggingFace Integration:** Use the standard HF downloader pattern (repository + filename) for adding new models.
+
+## 8. GSD Orchestration UX
+- **Command Autofill:** When a phase advances or a task completes, the UI must suggest the next logical GSD command (e.g., `/gsd discuss`, `/gsd plan`, `/gsd execute`) in the input buffer.
+- **No Persistent Sessions:** Persistent "Last Chat" loading is disabled. Each session is standalone unless explicitly reloaded from an audit log (future feature).
