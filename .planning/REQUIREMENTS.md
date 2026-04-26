@@ -47,15 +47,15 @@ The agent must provide a confidence percentage for each diagnosis and repair rec
 
 ---
 
-## [Phase 04] GSD 2.0 Integration & Autonomous Workflows
+## [Phase 04] GSD 2.0 Integration & Autonomous Workflows (Completed)
 
-### GSD-01: Pi SDK Orchestration
+### ✓ GSD-01: Pi SDK Orchestration
 Integration of GSD 2.0 (Pi SDK) as the primary state machine for managing the `discover → discuss → plan → execute → verify → close` lifecycle.
 
-### GSD-02: Phase-Based Context Resets
+### ✓ GSD-02: Phase-Based Context Resets
 GSD must reset the LLM context between phases to prevent "context rot" and ensure long-running troubleshooting sessions remain accurate.
 
-### GSD-03: Autonomous Error Recovery
+### ✓ GSD-03: Autonomous Error Recovery
 Implementation of GSD's Node repair operator (RETRY, DECOMPOSE, PRUNE) to handle verification failures during repair tasks.
 
 ---

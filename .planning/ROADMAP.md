@@ -40,26 +40,26 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 
 **Success Metrics:** Agent accurately identifies 80% of common OS issues in a read-only environment.
 
-## [ ] Phase 03: Guided Repair & Human-Approved Fixes
+## [x] Phase 03: Guided Repair & Human-Approved Fixes
 **Goal:** Transition from diagnostics to repair with mandatory human-in-the-loop gates.
 **Plans:** 3 plans
 **Requirements:** [FIX-01, FIX-02, FIX-03]
 **Plans:**
-- [ ] 03-01-PLAN.md — Implement HITL permission system and snapshot management.
+- [x] 03-01-PLAN.md — Implement HITL permission system and snapshot management.
 - [x] 03-02-PLAN.md — Implement core repair tools (services, packages, permissions).
-- [ ] 03-03-PLAN.md — Implement transactional safety loop and Bayesian confidence scoring.
+- [x] 03-03-PLAN.md — Implement transactional safety loop and Bayesian confidence scoring.
 
 **Success Metrics:** 0% unexpected system modifications; agent never executes a fix without explicit user approval.
 
-## [ ] Phase 04: GSD 2.0 Integration & Autonomous Workflows
+## [x] Phase 04: GSD 2.0 Integration & Autonomous Workflows
 **Goal:** Integrate the GSD 2.0 orchestration layer for complex, multi-step repairs.
 **Plans:** 4 plans
 **Requirements:** [GSD-01, GSD-02, GSD-03]
 **Plans:**
 - [x] 04-01-PLAN.md — Establish core orchestration scaffold and Phase FSM.
-- [x] 04-02-PLAN.md — Implement context reset logic and autonomous recovery operators.
+- [x] 04-02-PLAN.md — Context reset logic and autonomous recovery operators.
 - [x] 04-03-PLAN.md — Wire slash commands and main loop routing for GSD orchestration.
-- [x] 04-04-PLAN.md — End-to-end integration tests and GSD 2.0 protocol validation.
+- [x] 04-04-PLAN.md — Perform end-to-end integration testing and protocol validation.
 
 **Success Metrics:** Agent successfully navigates 5+ step repair workflows with automatic recovery from mid-step failures.
 
