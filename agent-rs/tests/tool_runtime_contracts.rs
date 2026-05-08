@@ -1,6 +1,7 @@
 use agent_rs::agent_core::tool_runtime::{ToolRuntime, ToolRequest, ToolLifecycle};
-use agent_rs::tools::{self, ToolRegistry, Tool, ToolResult};
-use agent_rs::security::policy::{PolicyContext, PermissionTier};
+use agent_rs::tools::{self, ToolResult};
+use agent_rs::tools::Tool;
+use agent_rs::security::policy::{PolicyContext, PermissionTier, TrustLevel};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -19,6 +20,7 @@ async fn test_tool_runtime_basic_execution() {
 
     let policy_context = PolicyContext {
         permission_tier: PermissionTier::WorkspaceWrite,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::WorkspaceWrite),
         exec_mode: "chat".to_string(),
         workspace_root: std::path::PathBuf::from("."),
     };
@@ -47,6 +49,7 @@ async fn test_tool_runtime_concurrent_ordering() {
 
     let policy_context = PolicyContext {
         permission_tier: PermissionTier::WorkspaceWrite,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::WorkspaceWrite),
         exec_mode: "chat".to_string(),
         workspace_root: std::path::PathBuf::from("."),
     };
@@ -96,11 +99,19 @@ async fn test_tool_runtime_concurrent_ordering() {
 struct SlowTool;
 impl Tool for SlowTool {
     fn name(&self) -> String { "slow_tool".into() }
-    fn description(&self) -> String { "sleeps".into() }
+    fn description(&self) -> String { "sleeps for 35 seconds".into() }
     fn schema(&self) -> Value { json!({}) }
     fn execute(&self, _args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
         std::thread::sleep(std::time::Duration::from_secs(35));
         ToolResult { success: true, output: "done".into() }
+    }
+}
+
+struct AlwaysAllowRequester;
+#[async_trait::async_trait]
+impl agent_rs::types::PermissionRequester for AlwaysAllowRequester {
+    async fn request_permission(&self, _req: agent_rs::types::PermissionRequest) -> agent_rs::types::PermissionResponse {
+        agent_rs::types::PermissionResponse::Allow
     }
 }
 
@@ -109,20 +120,22 @@ async fn test_tool_runtime_timeout() {
     let mut registry = tools::create_default_registry();
     registry.register(Box::new(SlowTool));
     let registry = Arc::new(registry);
-let req = ToolRequest {
-    call_id: "timeout_test".to_string(),
-    name: "slow_tool".to_string(),
-    arguments: json!({}),
-    confidence: 1.0,
-};
+    let req = ToolRequest {
+        call_id: "timeout_test".to_string(),
+        name: "slow_tool".to_string(),
+        arguments: json!({}),
+        confidence: 1.0,
+    };
 
     let policy_context = PolicyContext {
-        permission_tier: PermissionTier::WorkspaceWrite,
+        permission_tier: PermissionTier::FullExec,
+        trust_level: TrustLevel::Full,
         exec_mode: "chat".to_string(),
         workspace_root: std::path::PathBuf::from("."),
     };
 
-    let tool_runtime = ToolRuntime::new(None, None);
+    let requester = Arc::new(AlwaysAllowRequester);
+    let tool_runtime = ToolRuntime::new(Some(requester), None);
 
     let (_, result, _) = tool_runtime.execute(
         req,
@@ -135,8 +148,8 @@ let req = ToolRequest {
         None,
     ).await;
 
-    assert!(!result.success);
-    assert!(result.output.contains("timed out"));
+    assert!(!result.success, "tool should fail due to 30s outer timeout, got: {}", result.output);
+    assert!(result.output.contains("timed out"), "output should mention timeout, got: {}", result.output);
 }
 
 #[tokio::test]
@@ -152,6 +165,7 @@ async fn test_tool_runtime_lifecycle_events() {
 
     let policy_context = PolicyContext {
         permission_tier: PermissionTier::WorkspaceWrite,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::WorkspaceWrite),
         exec_mode: "chat".to_string(),
         workspace_root: std::path::PathBuf::from("."),
     };
