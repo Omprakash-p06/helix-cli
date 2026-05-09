@@ -1,6 +1,6 @@
 use agent_rs::agent_core::tool_runtime::{ToolRequest, ToolRuntime};
 use agent_rs::audit::AuditStore;
-use agent_rs::security::policy::{PermissionTier, PolicyContext};
+use agent_rs::security::policy::{PermissionTier, PolicyContext, TrustLevel};
 use agent_rs::tools;
 use serde_json::json;
 use std::path::PathBuf;
@@ -48,6 +48,7 @@ async fn secure_runtime_logs_safe_and_blocked_commands() {
 
     let policy_context = PolicyContext {
         permission_tier: PermissionTier::FullExec,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::FullExec),
         exec_mode: "agentic".to_string(),
         workspace_root,
     };

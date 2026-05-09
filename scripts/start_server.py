@@ -236,6 +236,7 @@ def main():
     print(f"  Starting LLM Server: {model_name}")
     print("=" * 55)
     print(f"  Model path: {model_path}")
+    print(f"  Loading model: {model_name} from {model_path}")
     print(f"  Endpoint:   http://{config.SERVER_HOST}:{config.SERVER_PORT}/v1")
     print()
 

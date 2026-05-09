@@ -1,147 +1,221 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import sys
-import re
-import math
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 try:
-    import requests
-    from tqdm import tqdm
+    from huggingface_hub import HfApi, hf_hub_download
 except ImportError:
-    print("Missing dependencies. Please run 'pip install requests tqdm'")
+    print("Missing dependency: huggingface_hub. Please run 'pip install huggingface_hub tqdm'")
     sys.exit(1)
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+try:
+    from tqdm import tqdm
+except ImportError:
+    print("Missing dependency: tqdm. Please run 'pip install tqdm'")
+    sys.exit(1)
 
-def format_size(size_bytes):
-    if size_bytes == 0:
-        return "0B"
-    size_name = ("B", "KB", "MB", "GB", "TB")
-    i = int(math.floor(math.log(size_bytes, 1024)))
-    p = math.pow(1024, i)
-    s = round(size_bytes / p, 2)
-    return f"{s} {size_name[i]}"
 
-def get_gguf_files(repo_id):
-    repo_id = repo_id.strip().rstrip("/")
-    if "huggingface.co/" in repo_id:
-        repo_id = repo_id.split("huggingface.co/")[-1]
-        
-    print(f"\n  Querying HuggingFace API for repo: {repo_id} ...")
-    url = f"https://huggingface.co/api/models/{repo_id}/tree/main"
-    
-    try:
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        tree = res.json()
-    except Exception as e:
-        print(f"  [!] Failed to query HuggingFace API: {e}")
-        print("  Ensure the repo exists, is public, and is formatted as 'Author/Model'.")
-        sys.exit(1)
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+MODELS_DIR = PROJECT_DIR / "models"
+STAGING_DIR = MODELS_DIR / ".staging"
 
-    gguf_files = []
-    for item in tree:
-        if item.get("type") == "file" and item.get("path", "").endswith(".gguf"):
-            gguf_files.append(item)
-            
+
+def _scripts_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+if str(_scripts_dir()) not in sys.path:
+    sys.path.insert(0, str(_scripts_dir()))
+
+from model_install import finalize_verified_download, resolve_model_ref
+
+
+def normalize_repo_id(repo_id: str) -> str:
+    cleaned = repo_id.strip().rstrip("/")
+    if "huggingface.co/" in cleaned:
+        cleaned = cleaned.split("huggingface.co/")[-1]
+    for prefix in ("https://", "http://"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned.split(prefix, 1)[-1]
+    if cleaned.startswith("hf.co/"):
+        cleaned = cleaned.split("hf.co/")[-1]
+    return cleaned.strip("/")
+
+
+def format_size(size_bytes: int) -> str:
+    if size_bytes <= 0:
+        return "0 B"
+
+    units = ("B", "KB", "MB", "GB", "TB")
+    size = float(size_bytes)
+    unit_index = 0
+    while size >= 1024.0 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+    return f"{size:.2f} {units[unit_index]}"
+
+
+def _api() -> HfApi:
+    return HfApi()
+
+
+def _repo_info(repo_id: str):
+    return _api().repo_info(repo_id, files_metadata=True)
+
+
+def _file_metadata(repo_info, filename: str) -> Optional[Dict[str, Any]]:
+    for sibling in getattr(repo_info, "siblings", []):
+        if sibling.rfilename == filename:
+            lfs = getattr(sibling, "lfs", None)
+            return {
+                "filename": sibling.rfilename,
+                "size": int(getattr(sibling, "size", 0) or 0),
+                "sha256": getattr(lfs, "sha256", None),
+                "repo_revision": getattr(repo_info, "sha", None),
+            }
+    return None
+
+
+def list_repo_files(repo_id: str) -> List[Dict[str, Any]]:
+    repo_id = normalize_repo_id(repo_id)
+    repo_info = _repo_info(repo_id)
+
+    gguf_files: List[Dict[str, Any]] = []
+    for sibling in getattr(repo_info, "siblings", []):
+        if sibling.rfilename.lower().endswith(".gguf"):
+            lfs = getattr(sibling, "lfs", None)
+            gguf_files.append(
+                {
+                    "repo_id": repo_id,
+                    "filename": sibling.rfilename,
+                    "size": int(getattr(sibling, "size", 0) or 0),
+                    "sha256": getattr(lfs, "sha256", None),
+                    "repo_revision": getattr(repo_info, "sha", None),
+                }
+            )
+
     if not gguf_files:
-        print("  [!] No .gguf files found in the root of this repository.")
-        sys.exit(1)
-        
-    return repo_id, gguf_files
+        raise ValueError(f"No .gguf files found in {repo_id}")
 
-def download_file(url, dest_path):
-    if os.path.exists(dest_path):
-        print(f"\n  Already exists: {os.path.basename(dest_path)} — skipping download.")
-        return True
+    return gguf_files
 
-    print(f"\n  Downloading {os.path.basename(dest_path)}...")
+
+def list_repos_by_tag(tag: str, limit: int = 10) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for model in _api().list_models(search=tag, limit=limit, sort="downloads", direction=-1):
+        results.append(
+            {
+                "repo_id": model.modelId,
+                "downloads": getattr(model, "downloads", None),
+                "likes": getattr(model, "likes", None),
+                "tags": list(getattr(model, "tags", []) or []),
+            }
+        )
+    return results
+
+
+def download_file(repo_id: str, filename: str, revision: Optional[str] = None) -> Path:
+    repo_id = normalize_repo_id(repo_id)
+    repo_info = _repo_info(repo_id)
+    metadata = _file_metadata(repo_info, filename)
+    if metadata is None:
+        raise ValueError(f"{filename} was not found in {repo_id}")
+
+    expected_sha = metadata.get("sha256")
+    if not expected_sha:
+        raise ValueError(f"No SHA256 metadata available for {filename} in {repo_id}")
+
+    revision = revision or metadata.get("repo_revision") or "main"
+    local_dir = STAGING_DIR / repo_id.replace("/", "__")
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n  Downloading {filename}")
+    print(f"  Repo: {repo_id}")
+    print(f"  Revision: {revision}")
+    print(f"  Size: {format_size(metadata['size'])}")
+
+    downloaded_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        revision=revision,
+        local_dir=str(local_dir),
+        local_dir_use_symlinks=False,
+    )
+
+    staged_path = Path(downloaded_path)
+    if not staged_path.exists():
+        raise FileNotFoundError(f"Download completed but file not found: {staged_path}")
+
+    print("  Verifying SHA256...")
+    final_path = finalize_verified_download(staged_path, expected_sha)
+    print(f"  [✓] Installed to {final_path}")
+    return final_path
+
+
+def mutate_config(filename: str) -> None:
+    print(f"  [✓] Model '{filename}' is ready in models/.")
+    print("  [✓] Next time you run `python start.py`, the launcher will discover it automatically.")
+
+
+def _print_repo_files(files: List[Dict[str, Any]]) -> None:
+    print("\n  Available GGUF files:")
+    for index, file_obj in enumerate(files, 1):
+        filename = file_obj["filename"]
+        size_text = format_size(int(file_obj.get("size", 0) or 0))
+        sha_prefix = (file_obj.get("sha256") or "")[0:8]
+        sha_text = f" sha256:{sha_prefix}" if sha_prefix else ""
+        print(f"  {index}) {filename}  ({size_text}){sha_text}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Download and install GGUF models from Hugging Face.")
+    parser.add_argument("repo", nargs="?", help="Hugging Face repo ID or URL")
+    parser.add_argument("--tag", help="Search popular repos by tag before downloading")
+    args = parser.parse_args()
+
+    repo_input = args.repo or input("\n  Enter Hugging Face Repo ID or URL (e.g. 'Bartowski/Meta-Llama-3-8B-Instruct-GGUF'): ")
+    repo_id = normalize_repo_id(repo_input)
+
+    if args.tag:
+        print(f"\n  Top matching repos for tag '{args.tag}':")
+        for entry in list_repos_by_tag(args.tag):
+            print(f"  - {entry['repo_id']} (downloads={entry.get('downloads')}, likes={entry.get('likes')})")
+
     try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        total_size = int(response.headers.get("content-length", 0))
+        gguf_files = list_repo_files(repo_id)
+    except Exception as exc:
+        print(f"  [!] Failed to inspect repo: {exc}")
+        return 1
 
-        with open(dest_path, "wb") as file, tqdm(
-            desc=os.path.basename(dest_path),
-            total=total_size,
-            unit="iB",
-            unit_scale=True,
-            unit_divisor=1024,
-        ) as bar:
-            for data in response.iter_content(chunk_size=8192):
-                size = file.write(data)
-                bar.update(size)
-        print("  Download complete.")
-        return True
-    except KeyboardInterrupt:
-        print("\n  [!] Download cancelled by user.")
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        sys.exit(1)
-    except Exception as e:
-        print(f"  Error downloading: {e}")
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        sys.exit(1)
+    _print_repo_files(gguf_files)
 
-def mutate_config(filename):
-    # In Phase 3, config.py natively sorts models by `os.path.getmtime`.
-    # Therefore, simply placing a fresh `.gguf` into the models/ folder guarantees it runs next.
-    print(f"  [✓] Model '{filename}' physically placed in models/ directory.")
-    print("  [✓] Next time you run `python start.py`, the agent will automatically boot this new model natively.")
-
-def main():
-    print("=" * 55)
-    print("  Universal HuggingFace Model Downloader")
-    print("=" * 55)
-    
-    # Ensure scripts directory is in path for imports
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-        
-    from model_install import install_model_spec, resolve_model_ref
-
-    # Simple check for CLI args to simulate --help
-    if len(sys.argv) > 1 and sys.argv[1] in ["-h", "--help"]:
-        print("\n  Usage: python download_model.py")
-        print("  Follow the interactive prompts to download any GGUF from hf.co")
-        sys.exit(0)
-    
-    repo_input = input("\n  Enter HuggingFace Repo ID or URL (e.g. 'Bartowski/Meta-Llama-3-8B-Instruct-GGUF'): ")
-    repo_id, gguf_files = get_gguf_files(repo_input)
-    
-    print("\n  Available Quantizations:")
-    for i, file_obj in enumerate(gguf_files, 1):
-        filename = file_obj.get("path")
-        size_bytes = file_obj.get("size", 0)
-        print(f"  {i}) {filename}  ({format_size(size_bytes)})")
-        
     choice = 0
     while not (1 <= choice <= len(gguf_files)):
         try:
             choice = int(input(f"\n  Select file to download (1-{len(gguf_files)}): "))
         except ValueError:
-            pass
-            
-    selected_file = gguf_files[choice - 1]["path"]
-    
-    # Resolve against trusted registry if it exists
-    model_spec = {
-        "name": f"{repo_id.split('/')[-1]}::{selected_file}",
-        "repo": repo_id,
-        "filename": selected_file,
-    }
-    
-    trusted = resolve_model_ref(repo_id)
-    if trusted and trusted["filename"] == selected_file:
-         model_spec.update(trusted)
-         
-    if install_model_spec(model_spec):
-        mutate_config(selected_file)
-        
-    print("\n" + "=" * 55)
-    print("  Wizard Complete. You can now run `python start.py`.")
-    print("=" * 55)
+            choice = 0
+
+    selected = gguf_files[choice - 1]
+
+    try:
+        final_path = download_file(repo_id, selected["filename"])
+        mutate_config(selected["filename"])
+        print(f"\n  Installed model: {final_path}")
+        print("\n" + "=" * 55)
+        print("  Wizard Complete. You can now run `python start.py`.")
+        print("=" * 55)
+        return 0
+    except KeyboardInterrupt:
+        print("\n  [!] Download cancelled by user.")
+        return 1
+    except Exception as exc:
+        print(f"\n  [!] Download failed: {exc}")
+        return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

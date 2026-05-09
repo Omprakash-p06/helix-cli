@@ -124,7 +124,13 @@ def download_model_to_staging(model_spec: Dict[str, Any], use_hf_hub: bool = Tru
 
 def activate_model(staged_path: Path) -> Path:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    final_path = MODELS_DIR / staged_path.name
+    try:
+        relative_path = staged_path.relative_to(STAGING_DIR)
+    except ValueError:
+        relative_path = Path(staged_path.name)
+
+    final_path = MODELS_DIR / relative_path
+    final_path.parent.mkdir(parents=True, exist_ok=True)
     if final_path.exists():
         final_path.unlink()
     shutil.move(str(staged_path), str(final_path))
@@ -132,17 +138,23 @@ def activate_model(staged_path: Path) -> Path:
     return final_path
 
 
+def finalize_verified_download(staged_path: Path, expected_sha256: Optional[str] = None) -> Path:
+    if expected_sha256:
+        if not verify_model_integrity(staged_path, expected_sha256):
+            print(f"  [!] Integrity check FAILED for {staged_path.name}")
+            staged_path.unlink(missing_ok=True)
+            raise ValueError(f"Integrity check failed for {staged_path.name}")
+        print("  [✓] Integrity check passed.")
+
+    return activate_model(staged_path)
+
+
 def install_model_spec(spec: Dict[str, Any]) -> bool:
     print(f"Installing trusted model: {spec['name']}")
     try:
         validate_trusted_model_spec(spec)
         staged_path = download_model_to_staging(spec)
-        if not verify_model_integrity(staged_path, spec["sha256"]):
-            print(f"  [!] Integrity check FAILED for {spec['filename']}")
-            staged_path.unlink(missing_ok=True)
-            return False
-        print("  [✓] Integrity check passed.")
-        activate_model(staged_path)
+        finalize_verified_download(staged_path, spec["sha256"])
         return True
     except Exception as exc:
         print(f"  [!] Installation failed: {exc}")

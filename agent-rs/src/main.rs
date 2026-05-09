@@ -947,46 +947,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let phase_str = parts[1];
                                 let goal = parts[2..].join(" ");
                                 let phase_goal = if goal.is_empty() { "General project refinement" } else { &goal };
-                                
-                                let phase = match phase_str {
-                                    "discover" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discover),
-                                    "discuss" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discuss),
-                                    "plan" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Plan),
-                                    "execute" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Execute),
-                                    "verify" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Verify),
-                                    "close" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Close),
-                                    _ => None,
-                                };
 
-                                if let Some(p) = phase {
-                                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Orchestrating {} phase...", phase_str)));
-                                    match agent_rs::agent_core::orchestration::advance_phase(
-                                        p,
-                                        1, // hardcoded phase number for MVP
-                                        "gsd-integration",
-                                        format!("User requested {} via slash command. Goal: {}", phase_str, phase_goal),
-                                        serde_json::json!({}),
-                                        Some(tool_runtime.clone()),
-                                        None,
-                                    ).await {
-                                        Ok(outcome) => {
-                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Artifact: {}", outcome.artifact_path)));
-                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                                if phase_str == "status" {
+                                    let output = std::process::Command::new("gsd-sdk")
+                                        .arg("progress")
+                                        .arg("--model")
+                                        .arg(&app_config.model_name)
+                                        .output();
+                                    match output {
+                                        Ok(o) => {
+                                            let combined = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(combined));
                                         }
                                         Err(e) => {
-                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] Failed to run gsd-sdk: {}", e)));
                                         }
                                     }
                                 } else {
-                                    let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Unknown phase: {}", phase_str)));
+                                    let phase = match phase_str {
+                                        "discover" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discover),
+                                        "discuss" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Discuss),
+                                        "plan" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Plan),
+                                        "execute" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Execute),
+                                        "verify" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Verify),
+                                        "close" => Some(agent_rs::agent_core::orchestration::phase_state::Phase::Close),
+                                        _ => None,
+                                    };
+
+                                    if let Some(p) = phase {
+                                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Orchestrating {} phase...", phase_str)));
+                                        match agent_rs::agent_core::orchestration::advance_phase(
+                                            p,
+                                            1, // hardcoded phase number for MVP
+                                            "gsd-integration",
+                                            format!("User requested {} via slash command. Goal: {}", phase_str, phase_goal),
+                                            serde_json::json!({}),
+                                            Some(tool_runtime.clone()),
+                                            None,
+                                        ).await {
+                                            Ok(outcome) => {
+                                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Artifact: {}", outcome.artifact_path)));
+                                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] {}", outcome.summary)));
+                                            }
+                                            Err(e) => {
+                                                let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] {}", e)));
+                                            }
+                                        }
+                                    } else {
+                                        let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Unknown phase: {}", phase_str)));
+                                    }
                                 }
                             }
                         } else if cmd_raw.starts_with("/gsd-") {
                             let subcmd = cmd_raw.trim_start_matches("/gsd-");
                             match subcmd {
-                                "next" | "progress" | "stats" | "health" => {
+                                "next" | "progress" | "stats" | "health" | "status" => {
                                     let sdk_cmd = match subcmd {
-                                        "next" | "progress" | "stats" | "health" => "auto",
+                                        "next" | "progress" | "stats" | "health" | "status" => "auto",
                                         _ => subcmd,
                                     };
                                     let output = std::process::Command::new("gsd-sdk")
@@ -1511,6 +1528,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let require_confirm = app_config.require_confirmation;
                         let policy_context = PolicyContext {
                             permission_tier: app_config.permission_tier,
+                            trust_level: crate::security::policy::TrustLevel::from_permission_tier(app_config.permission_tier),
                             exec_mode: app_config.exec_mode.clone(),
                             workspace_root: tools::get_allowed_dir(),
                         };
@@ -2047,6 +2065,7 @@ async fn run_llm_loop_tui(
                     let require_confirm = app_config.require_confirmation;
                     let policy_context = PolicyContext {
                         permission_tier: app_config.permission_tier,
+                        trust_level: crate::security::policy::TrustLevel::from_permission_tier(app_config.permission_tier),
                         exec_mode: app_config.exec_mode.clone(),
                         workspace_root: tools::get_allowed_dir(),
                     };

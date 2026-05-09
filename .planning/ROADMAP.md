@@ -45,10 +45,12 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 *   **Plans:** 4 plans (05-01 through 05-04)
 *   **Success Metrics:** User can switch models without reconfiguring code; HF models can be downloaded via command; UI suggests the next logical GSD step.
 
-## [ ] Phase 06: Autonomous "Fix It" Mode & Multi-agent Voting
+## [x] Phase 06: Autonomous "Fix It" Mode & Multi-agent Voting
 **Goal:** Enable high-trust autonomous operations for routine maintenance and repair.
+*   **Status:** COMPLETED (3 plans)
 *   **Tasks:**
     *   Implement user-configurable trust levels (Safe Mode vs. Auto Mode).
     *   Build Guardian multi-agent voting for high-risk action consensus.
     *   Implement blocklist for irreversible/unrecoverable actions.
+*   **Plans:** 3 plans (06-01 through 06-03)
 *   **Success Metrics:** 95% diagnostic accuracy; 0% catastrophic failures in 1000+ test runs.

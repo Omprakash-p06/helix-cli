@@ -1,5 +1,5 @@
 use agent_rs::tools::{create_default_registry};
-use agent_rs::security::policy::{PolicyContext, PermissionTier};
+use agent_rs::security::policy::{PolicyContext, PermissionTier, TrustLevel};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -9,6 +9,7 @@ async fn test_phase02_log_introspection() {
     let tool = registry.get("get_system_logs").expect("tool exists");
     let ctx = PolicyContext {
         permission_tier: PermissionTier::ReadOnly,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::ReadOnly),
         exec_mode: "agentic".into(),
         workspace_root: PathBuf::from("."),
     };
@@ -30,6 +31,7 @@ async fn test_phase02_system_discovery() {
     let registry = create_default_registry();
     let ctx = PolicyContext {
         permission_tier: PermissionTier::ReadOnly,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::ReadOnly),
         exec_mode: "agentic".into(),
         workspace_root: PathBuf::from("."),
     };
@@ -55,6 +57,7 @@ async fn test_phase02_file_introspection() {
     let registry = create_default_registry();
     let ctx = PolicyContext {
         permission_tier: PermissionTier::ReadOnly,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::ReadOnly),
         exec_mode: "agentic".into(),
         workspace_root: PathBuf::from("."),
     };
@@ -81,6 +84,7 @@ async fn test_phase02_security_guardrails() {
     let registry = create_default_registry();
     let ctx = PolicyContext {
         permission_tier: PermissionTier::ReadOnly,
+        trust_level: TrustLevel::from_permission_tier(PermissionTier::ReadOnly),
         exec_mode: "agentic".into(),
         workspace_root: PathBuf::from("."),
     };

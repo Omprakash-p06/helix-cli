@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use sysinfo::System;
 
-use crate::security::policy::PolicyContext;
+use crate::security::policy::{blocked_command_reason, command_matches_block_pattern, PolicyContext};
 use crate::agent_core::diagnostics::system::SystemProvider;
 use crate::agent_core::diagnostics::logs;
 use crate::agent_core::repair::tools::{ServiceRepairTool, PackageRepairTool, PermissionRepairTool};
@@ -414,9 +414,21 @@ fn execute_run_terminal_command(
     _policy_context: &PolicyContext,
 ) -> ToolResult {
     let cmd = input.command;
+    if let Some(reason) = blocked_command_reason(&cmd) {
+        println!("⚠️  COMMAND BLOCKED: {}", cmd);
+        return ToolResult {
+            success: false,
+            output: format!(
+                "COMMAND BLOCKED: {} — This is a non-bypassable security measure ({})",
+                cmd,
+                reason
+            ),
+        };
+    }
+
     let is_dangerous = dangerous_commands
         .iter()
-        .any(|bad| cmd.trim().starts_with(bad.as_str()));
+        .any(|bad| command_matches_block_pattern(&cmd, bad));
 
     if is_dangerous && require_confirmation {
         println!("⚠️  DANGEROUS COMMAND BLOCKED: {}", cmd);

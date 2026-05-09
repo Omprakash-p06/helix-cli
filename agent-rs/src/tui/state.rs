@@ -5,6 +5,7 @@ use ratatui::style::Color;
 
 use super::api::{ConnectionState, ContextFileEntry, SessionInfo, StatusBanner, TuiLayoutMode};
 use super::commands::{Command, default_commands};
+use crate::security::policy::TrustLevel;
 
 const TOOL_FLASH_DURATION: Duration = Duration::from_millis(450);
 const MESSAGE_FADE_DURATION: Duration = Duration::from_millis(150);
@@ -321,11 +322,19 @@ impl PermissionTierOption {
         }
     }
 
+    pub fn to_trust_level(self) -> TrustLevel {
+        match self {
+            PermissionTierOption::ReadOnly => TrustLevel::Safe,
+            PermissionTierOption::WorkspaceWrite => TrustLevel::Auto,
+            PermissionTierOption::FullExec => TrustLevel::Full,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
-            PermissionTierOption::ReadOnly => "ReadOnly",
-            PermissionTierOption::WorkspaceWrite => "WorkspaceWrite",
-            PermissionTierOption::FullExec => "FullExec",
+            PermissionTierOption::ReadOnly => "Safe",
+            PermissionTierOption::WorkspaceWrite => "Auto",
+            PermissionTierOption::FullExec => "Full",
         }
     }
 }
@@ -341,6 +350,7 @@ pub struct SettingsState {
     pub theme: ThemeName,
     pub sidebar_visible: bool,
     pub permission_tier: PermissionTierOption,
+    pub trust_level: TrustLevel,
 }
 
 impl Default for SettingsState {
@@ -361,6 +371,7 @@ impl SettingsState {
             theme: ThemeName::Dark,
             sidebar_visible: true,
             permission_tier: PermissionTierOption::WorkspaceWrite,
+            trust_level: TrustLevel::Auto,
         }
     }
 

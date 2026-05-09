@@ -375,6 +375,7 @@ async fn chat_handler(
 
                     let policy_context = PolicyContext {
                         permission_tier: state.app_config.permission_tier,
+                        trust_level: crate::security::policy::TrustLevel::from_permission_tier(state.app_config.permission_tier),
                         exec_mode: state.app_config.exec_mode.clone(),
                         workspace_root: tools::get_allowed_dir(),
                     };

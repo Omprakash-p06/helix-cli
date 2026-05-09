@@ -1,3 +1,4 @@
+use crate::security::policy::blocked_command_reason;
 use crate::types::{PermissionRequest, PermissionResponse, PermissionRequester};
 use inquire::Confirm;
 use tokio::task;
@@ -7,6 +8,14 @@ pub struct InquirePermissionRequester;
 #[async_trait::async_trait]
 impl PermissionRequester for InquirePermissionRequester {
     async fn request_permission(&self, request: PermissionRequest) -> PermissionResponse {
+        if request.tool_name == "run_terminal_command"
+            && let Some(command) = request.arguments.get("command").and_then(|value| value.as_str())
+            && let Some(reason) = blocked_command_reason(command)
+        {
+            eprintln!("COMMAND BLOCKED: {} ({})", command, reason);
+            return PermissionResponse::Deny;
+        }
+
         let prompt = format!(
             "Tool '{}' wants to execute with arguments:\n{}\nReason: {}\nAllow execution?",
             request.tool_name,

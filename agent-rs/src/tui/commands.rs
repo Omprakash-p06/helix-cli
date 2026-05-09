@@ -125,6 +125,63 @@ pub fn default_commands() -> Vec<Command> {
         });
     }
 
+    cmds.extend(vec![
+        Command {
+            id: "gsd_plan".into(),
+            name: "/gsd plan".into(),
+            description: "Plan the next GSD phase".into(),
+            example: "/gsd plan 5".into(),
+            shortcut: Some("/p".into()),
+            category: CommandCategory::GSD,
+            immediate: false,
+        },
+        Command {
+            id: "gsd_execute".into(),
+            name: "/gsd execute".into(),
+            description: "Execute the active GSD phase".into(),
+            example: "/gsd execute 5".into(),
+            shortcut: Some("/e".into()),
+            category: CommandCategory::GSD,
+            immediate: false,
+        },
+        Command {
+            id: "gsd_verify".into(),
+            name: "/gsd verify".into(),
+            description: "Verify work completed by the current phase".into(),
+            example: "/gsd verify 5".into(),
+            shortcut: Some("/v".into()),
+            category: CommandCategory::GSD,
+            immediate: false,
+        },
+        Command {
+            id: "gsd_discuss".into(),
+            name: "/gsd discuss".into(),
+            description: "Gather phase context before planning".into(),
+            example: "/gsd discuss 5".into(),
+            shortcut: Some("/d".into()),
+            category: CommandCategory::GSD,
+            immediate: false,
+        },
+        Command {
+            id: "gsd_next".into(),
+            name: "/gsd next".into(),
+            description: "Advance to the next GSD workflow step".into(),
+            example: "/gsd next".into(),
+            shortcut: Some("/n".into()),
+            category: CommandCategory::GSD,
+            immediate: true,
+        },
+        Command {
+            id: "gsd_status".into(),
+            name: "/gsd status".into(),
+            description: "Show the current GSD status".into(),
+            example: "/gsd status".into(),
+            shortcut: Some("/s".into()),
+            category: CommandCategory::GSD,
+            immediate: true,
+        },
+    ]);
+
     cmds
 }
 
@@ -158,4 +215,50 @@ pub fn filter_commands(commands: &[Command], filter: &str) -> Vec<Command> {
         })
         .cloned()
         .collect()
+}
+
+fn shortcut_matches(command: &Command, filter: &str) -> bool {
+    if let Some(shortcut) = &command.shortcut {
+        let shortcut = shortcut.to_lowercase();
+        let filter = filter.to_lowercase();
+        if shortcut.starts_with(&filter) || shortcut == filter {
+            return true;
+        }
+    }
+
+    if command.category == CommandCategory::GSD && filter.starts_with('/') {
+        let suffix = command.name.trim_start_matches('/');
+        let mut parts = suffix.split_whitespace();
+        if let Some(prefix) = parts.next() {
+            let initials = parts.filter_map(|part| part.chars().next()).collect::<String>();
+            let compact = if initials.is_empty() {
+                format!("/{}", prefix)
+            } else {
+                format!("/{} {}", prefix, initials)
+            };
+            if filter == format!("/{}", prefix.chars().next().unwrap_or_default())
+                || compact.starts_with(filter)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn match_partial(commands: &[Command], filter: &str) -> Option<Command> {
+    let trimmed = filter.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    commands
+        .iter()
+        .find(|command| {
+            command.name.to_lowercase().starts_with(&trimmed.to_lowercase())
+                || command.id.to_lowercase().starts_with(&trimmed.to_lowercase())
+                || shortcut_matches(command, trimmed)
+        })
+        .cloned()
 }

@@ -317,6 +317,7 @@ mod tests {
     fn mock_ctx() -> PolicyContext {
         PolicyContext {
             permission_tier: PermissionTier::FullExec,
+            trust_level: crate::security::policy::TrustLevel::from_permission_tier(PermissionTier::FullExec),
             exec_mode: "agentic".to_string(),
             workspace_root: PathBuf::from("."),
         }

@@ -206,6 +206,7 @@ pub struct TuiApp {
     settings: state::SettingsState,
     // GSD state tracking
     last_gsd_command: Option<String>,
+    suppress_ghost_suggestion: bool,
     command_palette: state::CommandPaletteState,
 }
 
@@ -246,6 +247,7 @@ impl TuiApp {
             current_theme: state::ThemeName::Dark,
             settings: state::SettingsState::new(),
             last_gsd_command: None,
+            suppress_ghost_suggestion: false,
             command_palette: state::CommandPaletteState {
                 visible: false,
                 commands: commands::default_commands(),
@@ -271,6 +273,10 @@ impl TuiApp {
 
     /// Get ghost autocomplete suggestion based on current input.
     fn ghost_suggestion(&self) -> Option<String> {
+        if self.suppress_ghost_suggestion {
+            return None;
+        }
+
         let current = self.input.value();
         
         // GSD Autofill logic: suggest next phase based on last command
@@ -294,16 +300,19 @@ impl TuiApp {
 
         if current.starts_with('/') {
             // Check legacy SLASH_COMMANDS first
+            let cmds = commands::default_commands();
+
+            // Check registry names for inline ghost text first.
+            if let Some(cmd) = commands::match_partial(&cmds, current) {
+                if cmd.name.starts_with(current) && cmd.name != current {
+                    return Some(cmd.name[current.len()..].to_string());
+                }
+            }
+
+            // Then check legacy slash commands.
             for cmd in SLASH_COMMANDS {
                 if cmd.starts_with(current) && *cmd != current {
                     return Some(cmd[current.len()..].to_string());
-                }
-            }
-            // Then check dynamic registry
-            let cmds = commands::default_commands();
-            for cmd in cmds {
-                if cmd.name.starts_with(current) && cmd.name != current {
-                    return Some(cmd.name[current.len()..].to_string());
                 }
             }
         }
@@ -328,6 +337,7 @@ impl TuiApp {
 
         let trimmed = text.trim().to_string();
         self.input.reset();
+        self.suppress_ghost_suggestion = false;
 
         if trimmed.is_empty() {
             return None;
@@ -496,6 +506,7 @@ impl TuiApp {
         self.settings.token_limit_input = self.max_tokens.to_string();
         self.settings.theme = self.current_theme;
         self.settings.sidebar_visible = self.sidebar_visible;
+        self.settings.trust_level = self.settings.permission_tier.to_trust_level();
     }
 
     fn apply_settings_to_app(&mut self) {
@@ -506,6 +517,7 @@ impl TuiApp {
         }
         self.current_theme = self.settings.theme;
         self.sidebar_visible = self.settings.sidebar_visible;
+        self.settings.trust_level = self.settings.permission_tier.to_trust_level();
     }
 
     pub fn toggle_tool_collapsed(&mut self, id: u64) {
@@ -1717,6 +1729,7 @@ fn handle_key_event(
                     },
                     state::SettingsCategory::Security => {
                         app.settings.permission_tier = app.settings.permission_tier.next();
+                        app.settings.trust_level = app.settings.permission_tier.to_trust_level();
                     }
                 }
                 app.apply_settings_to_app();
@@ -1891,12 +1904,23 @@ fn handle_key_event(
                     app.add_newline();
                 }
 
+                // Escape clears the suggestion without clearing the typed text.
+                KeyCode::Esc => {
+                    app.suppress_ghost_suggestion = true;
+                }
+
                 // Tab or Right = accept ghost suggestion
                 KeyCode::Tab | KeyCode::Right => {
+                    let current = app.input.value().to_string();
                     if let Some(suggestion) = app.ghost_suggestion() {
-                        let current = app.input.value().to_string();
                         let completed = format!("{}{}", current, suggestion);
                         app.input = Input::new(completed);
+                        app.suppress_ghost_suggestion = false;
+                    } else if current.starts_with('/') {
+                        if let Some(command) = commands::match_partial(&commands::default_commands(), &current) {
+                            app.input = Input::new(command.name.clone());
+                            app.suppress_ghost_suggestion = false;
+                        }
                     } else if key.code == KeyCode::Right {
                         app.input.handle_event(&Event::Key(key));
                     }
@@ -1910,6 +1934,7 @@ fn handle_key_event(
                             .saturating_add(1)
                             .min(app.max_scroll_offset);
                     } else if !app.command_history.is_empty() {
+                        app.suppress_ghost_suggestion = false;
                         let idx = match app.history_index {
                             Some(0) => 0,
                             Some(i) => i - 1,
@@ -1927,6 +1952,7 @@ fn handle_key_event(
                     if app.input.value().is_empty() && app.multiline_buffer.is_empty() {
                         app.scroll_offset = app.scroll_offset.saturating_sub(1);
                     } else if let Some(idx) = app.history_index {
+                        app.suppress_ghost_suggestion = false;
                         if idx + 1 < app.command_history.len() {
                             app.history_index = Some(idx + 1);
                             let cmd = app.command_history[idx + 1].clone();
@@ -1951,6 +1977,7 @@ fn handle_key_event(
 
                 // All other keys → tui-input handler
                 _ => {
+                    app.suppress_ghost_suggestion = false;
                     app.input.handle_event(&Event::Key(key));
                     // Reset scroll on typing
                     app.scroll_offset = 0;

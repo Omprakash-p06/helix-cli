@@ -384,7 +384,8 @@ mod tests {
         };
 
         let ctx = PolicyContext {
-            permission_tier: PermissionTier::FullExec,
+            permission_tier: PermissionTier::ReadOnly,
+            trust_level: crate::security::policy::TrustLevel::Safe,
             exec_mode: "test".to_string(),
             workspace_root: std::env::temp_dir(),
         };
@@ -427,7 +428,8 @@ mod tests {
         };
 
         let ctx = PolicyContext {
-            permission_tier: PermissionTier::FullExec,
+            permission_tier: PermissionTier::ReadOnly,
+            trust_level: crate::security::policy::TrustLevel::Safe,
             exec_mode: "test".to_string(),
             workspace_root: std::env::temp_dir(),
         };
@@ -484,7 +486,8 @@ mod tests {
         };
 
         let ctx = PolicyContext {
-            permission_tier: PermissionTier::FullExec,
+            permission_tier: PermissionTier::ReadOnly,
+            trust_level: crate::security::policy::TrustLevel::Safe,
             exec_mode: "test".to_string(),
             workspace_root: std::env::temp_dir(),
         };

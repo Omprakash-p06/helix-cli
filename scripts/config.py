@@ -1,10 +1,31 @@
 import os
+import re
 import subprocess
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(PROJECT_DIR, "models")
+
+
+@dataclass(frozen=True)
+class ModelEntry:
+    name: str
+    path: str
+    size_mb: float
+    vram_estimate_gb: float
+    parameter_count_b: Optional[float] = None
+
+    def as_catalog_entry(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "path": self.path,
+            "size_mb": self.size_mb,
+            "vram_estimate_gb": self.vram_estimate_gb,
+            "parameter_count_b": self.parameter_count_b,
+        }
 
 
 def _safe_int(value: Optional[str]) -> Optional[int]:
@@ -42,41 +63,133 @@ def detect_gpu_vram_gb() -> Optional[int]:
     return max(0, round(mib / 1024))
 
 
+def _parse_parameter_count(model_name: str) -> Optional[float]:
+    matches = re.findall(r"(\d+(?:\.\d+)?)([BbMm])", model_name)
+    if not matches:
+        return None
+
+    value, unit = matches[-1]
+    try:
+        count = float(value)
+    except ValueError:
+        return None
+
+    if unit.upper() == "M":
+        return round(count / 1000.0, 3)
+    return round(count, 3)
+
+
+def _estimate_vram_gb(size_bytes: int, parameter_count_b: Optional[float]) -> float:
+    size_gb = size_bytes / (1024.0 * 1024.0 * 1024.0)
+    param_hint = (parameter_count_b or 0.0) * 0.15
+    return round(max(0.5, size_gb * 1.1, param_hint), 2)
+
+
+def scan_models_directory(models_dir: Optional[str] = None) -> List[ModelEntry]:
+    root = Path(models_dir or MODELS_DIR)
+    if not root.exists():
+        print(f"[Model Discovery] No models directory found at {root}.")
+        return []
+
+    discovered: List[ModelEntry] = []
+    for path in sorted(root.rglob("*.gguf")):
+        if not path.is_file():
+            continue
+
+        size_bytes = path.stat().st_size
+        parameter_count = _parse_parameter_count(path.stem)
+        discovered.append(
+            ModelEntry(
+                name=path.stem,
+                path=str(path),
+                size_mb=round(size_bytes / (1024.0 * 1024.0), 2),
+                vram_estimate_gb=_estimate_vram_gb(size_bytes, parameter_count),
+                parameter_count_b=parameter_count,
+            )
+        )
+
+    discovered.sort(
+        key=lambda item: (
+            float("inf") if item.parameter_count_b is None else item.parameter_count_b,
+            item.size_mb,
+            item.name.lower(),
+        )
+    )
+
+    if not discovered:
+        print(f"[Model Discovery] No GGUF models found in {root}.")
+
+    return discovered
+
+
 def scan_models_dir() -> Dict[str, Dict[str, Any]]:
-    models = {}
-    if not os.path.isdir(MODELS_DIR):
-        return models
-    
-    for f in os.listdir(MODELS_DIR):
-        if f.endswith(".gguf"):
-            name = f.replace(".gguf", "")
-            # Simple heuristic for common model names/variants
-            q_hint = "Q4_K_M" if "Q4" in f else "Q8_0" if "Q8" in f else "Unknown"
-            
-            models[name] = {
-                "repo_alias": name.lower(),
-                "variants": [
-                    {
-                        "min_vram_gb": 0,
-                        "quantization": q_hint,
-                        "filename": f,
-                        "gpu_layers": -1,
-                        "backend_hint": "cuda",
-                        "context_size": 8192,
-                        "batch_size": 512,
-                        "ubatch_size": 256,
-                        "guidance": f"Local model found: {f}",
-                    }
-                ],
-            }
+    models: Dict[str, Dict[str, Any]] = {}
+    for entry in scan_models_directory():
+        models[entry.name] = {
+            "repo_alias": entry.name.lower(),
+            "variants": [
+                {
+                    "min_vram_gb": 0,
+                    "quantization": "Unknown",
+                    "filename": Path(entry.path).name,
+                    "gpu_layers": -1,
+                    "backend_hint": "cuda",
+                    "context_size": 8192,
+                    "batch_size": 512,
+                    "ubatch_size": 256,
+                    "guidance": f"Local model found: {Path(entry.path).name}",
+                }
+            ],
+        }
     return models
 
 
-MODEL_CATALOG = scan_models_dir()
+BLOCKLIST = frozenset(
+    {
+        "rm -rf /",
+        "rm -rf /*",
+        "mkfs",
+        "mkfs.*",
+        "dd if=/dev/zero",
+        ":(){ :|:& };:",
+        "wget | sh",
+        "curl | sh",
+    }
+)
 
-# Fallback catalog if models/ is empty
-if not MODEL_CATALOG:
-    MODEL_CATALOG = {
+
+def _normalise_command(command: str) -> str:
+    return re.sub(r"\s+", " ", command.strip().lower())
+
+
+def is_blocked_command(command: str) -> bool:
+    normalized = _normalise_command(command)
+    if not normalized:
+        return False
+
+    if any(pattern in normalized for pattern in ("rm -rf /", "rm -rf /*")):
+        return True
+
+    if normalized.startswith("mkfs") or " mkfs." in normalized:
+        return True
+
+    if "dd if=/dev/zero" in normalized:
+        return True
+
+    if ":(){ :|:& };:" in normalized:
+        return True
+
+    if "wget" in normalized and ("| sh" in normalized or "| bash" in normalized):
+        return True
+
+    if "curl" in normalized and ("| sh" in normalized or "| bash" in normalized):
+        return True
+
+    return any(pattern in normalized for pattern in BLOCKLIST)
+
+
+def _static_model_catalog() -> Dict[str, Dict[str, Any]]:
+    return {
         "Qwen-3.6-27B-MoE": {
             "repo_alias": "qwen-3.6-27b-moe",
             "variants": [
@@ -92,6 +205,28 @@ if not MODEL_CATALOG:
                     "guidance": "24GB+ VRAM can run the 27B MoE in Q8_0 with full CUDA offload.",
                 },
                 {
+                    "min_vram_gb": 12,
+                    "quantization": "Q5_K_M",
+                    "filename": "Qwen3.6-27B-Instruct-Q5_K_M.gguf",
+                    "gpu_layers": 48,
+                    "backend_hint": "cuda",
+                    "context_size": 8192,
+                    "batch_size": 512,
+                    "ubatch_size": 256,
+                    "guidance": "12GB+ VRAM can run the 27B MoE in Q5_K_M with partial CUDA offload.",
+                },
+                {
+                    "min_vram_gb": 8,
+                    "quantization": "Q4_K_M",
+                    "filename": "Qwen3.6-27B-Instruct-Q4_K_M.gguf",
+                    "gpu_layers": 24,
+                    "backend_hint": "cuda",
+                    "context_size": 6144,
+                    "batch_size": 384,
+                    "ubatch_size": 192,
+                    "guidance": "8GB+ VRAM can run the 27B MoE in Q4_K_M with reduced CUDA offload.",
+                },
+                {
                     "min_vram_gb": 0,
                     "quantization": "Q4_K_M",
                     "filename": "Qwen3.6-27B-Instruct-Q4_K_M.gguf",
@@ -104,7 +239,59 @@ if not MODEL_CATALOG:
                 },
             ],
         },
+        "Qwen-3.6-35B-MoE": {
+            "repo_alias": "qwen-3.6-35b-moe",
+            "variants": [
+                {
+                    "min_vram_gb": 32,
+                    "quantization": "Q8_0",
+                    "filename": "Qwen3.6-35B-Instruct-Q8_0.gguf",
+                    "gpu_layers": -1,
+                    "backend_hint": "cuda",
+                    "context_size": 12288,
+                    "batch_size": 768,
+                    "ubatch_size": 384,
+                    "guidance": "32GB+ VRAM can run the 35B MoE in Q8_0 with full CUDA offload.",
+                },
+                {
+                    "min_vram_gb": 24,
+                    "quantization": "Q5_K_M",
+                    "filename": "Qwen3.6-35B-Instruct-Q5_K_M.gguf",
+                    "gpu_layers": 40,
+                    "backend_hint": "cuda",
+                    "context_size": 8192,
+                    "batch_size": 512,
+                    "ubatch_size": 256,
+                    "guidance": "24GB+ VRAM can run the 35B MoE in Q5_K_M with partial CUDA offload.",
+                },
+                {
+                    "min_vram_gb": 16,
+                    "quantization": "Q4_K_M",
+                    "filename": "Qwen3.6-35B-Instruct-Q4_K_M.gguf",
+                    "gpu_layers": 24,
+                    "backend_hint": "cuda",
+                    "context_size": 6144,
+                    "batch_size": 384,
+                    "ubatch_size": 192,
+                    "guidance": "16GB+ VRAM can run the 35B MoE in Q4_K_M with reduced CUDA offload.",
+                },
+                {
+                    "min_vram_gb": 0,
+                    "quantization": "Q4_K_M",
+                    "filename": "Qwen3.6-35B-Instruct-Q4_K_M.gguf",
+                    "gpu_layers": 0,
+                    "backend_hint": "cpu",
+                    "context_size": 4096,
+                    "batch_size": 256,
+                    "ubatch_size": 128,
+                    "guidance": "Without a supported discrete GPU, keep the 35B MoE on CPU in Q4_K_M.",
+                },
+            ],
+        },
     }
+
+
+MODEL_CATALOG = _static_model_catalog()
 
 
 def _variant_for_model(model_name: str, vram_gb: Optional[int]) -> Dict[str, Any]:
