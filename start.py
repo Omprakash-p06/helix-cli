@@ -3,8 +3,10 @@ import os
 import sys
 import time
 import subprocess
+from pathlib import Path
 import requests
 from scripts.helix_branding import print_helix_logo
+from scripts import config
 from scripts import onboarding_profile
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,9 +20,29 @@ print("=" * 55)
 
 
 def discover_models(models_dir):
-    if not os.path.isdir(models_dir):
-        return []
-    return sorted([f for f in os.listdir(models_dir) if f.lower().endswith(".gguf")])
+    discovered = []
+    for entry in config.scan_models_directory(models_dir):
+        discovered.append(
+            {
+                "name": entry.name,
+                "path": entry.path,
+                "size_mb": entry.size_mb,
+                "vram_estimate_gb": entry.vram_estimate_gb,
+                "parameter_count_b": entry.parameter_count_b,
+            }
+        )
+    return discovered
+
+
+def choose_default_model(models):
+    return min(
+        models,
+        key=lambda item: (
+            item.get("vram_estimate_gb", float("inf")),
+            item.get("size_mb", float("inf")),
+            item.get("name", "").lower(),
+        ),
+    )
 
 
 def choose_model(models, default_model=None):
@@ -28,14 +50,17 @@ def choose_model(models, default_model=None):
         print("  [!] No .gguf models found in models directory.")
         sys.exit(1)
 
-    if default_model not in models:
-        default_model = models[0]
+    if default_model is None or default_model not in models:
+        default_model = choose_default_model(models)
 
     default_index = models.index(default_model)
     print("\nSelect model to load:")
     for idx, model_file in enumerate(models, 1):
         marker = " (default)" if idx - 1 == default_index else ""
-        print(f"  {idx}) {model_file}{marker}")
+        print(
+            f"  {idx}) {model_file['name']}"
+            f"  [{model_file['size_mb']} MB, est. {model_file['vram_estimate_gb']} GB VRAM]{marker}"
+        )
 
     picked = input(f"Select model (1-{len(models)}, default {default_index + 1}): ").strip()
     try:
@@ -43,7 +68,45 @@ def choose_model(models, default_model=None):
     except Exception:
         selected = models[default_index]
 
-    return selected, os.path.join(PROJECT_DIR, "models", selected)
+    return selected
+
+
+def resolve_env_model(models):
+    env_model_name = os.environ.get("HELIX_MODEL_NAME", "").strip()
+    env_model_path = os.environ.get("HELIX_MODEL_PATH", "").strip()
+    if not env_model_name and not env_model_path:
+        return None
+
+    matched = None
+    if env_model_path:
+        env_path = Path(env_model_path)
+        if env_path.exists():
+            matched = next((item for item in models if Path(item["path"]) == env_path), None)
+        else:
+            print(f"  [!] External model path does not exist: {env_model_path}")
+
+    if matched is None and env_model_name:
+        matched = next(
+            (
+                item
+                for item in models
+                if item["name"] == env_model_name
+                or Path(item["path"]).name == env_model_name
+                or Path(item["path"]).stem == env_model_name
+            ),
+            None,
+        )
+
+    if matched is None and env_model_path:
+        matched = {
+            "name": env_model_name or Path(env_model_path).stem,
+            "path": env_model_path,
+            "size_mb": 0.0,
+            "vram_estimate_gb": 0.0,
+            "parameter_count_b": None,
+        }
+
+    return matched
 
 
 def choose_interface(default_interface="tui"):
@@ -82,9 +145,18 @@ def ask_yes_no(prompt, default_yes=True):
 
 models_dir = os.path.join(PROJECT_DIR, "models")
 models = discover_models(models_dir)
-if not models:
-    print("  [!] No .gguf models found in models directory.")
-    sys.exit(1)
+external_model = resolve_env_model(models)
+if external_model is not None:
+    selected_model = external_model
+else:
+    if not models:
+        print("  [!] No GGUF models were discovered in models/.")
+        sys.exit(1)
+
+    if len(models) == 1:
+        selected_model = models[0]
+    else:
+        selected_model = choose_model(models, choose_default_model(models))
 
 profile = onboarding_profile.load_profile()
 first_run = onboarding_profile.is_first_run(profile)
@@ -108,13 +180,22 @@ else:
 
 if use_defaults:
     selected_model_name = default_model_name
-    selected_model_path = os.path.join(models_dir, selected_model_name)
+    selected_model_path = os.path.join(models_dir, f"{selected_model_name}.gguf")
     interface_choice = default_interface
     exec_mode = default_exec_mode
 else:
-    selected_model_name, selected_model_path = choose_model(models, default_model_name)
+    if external_model is not None:
+        selected_model_name = selected_model["name"]
+        selected_model_path = selected_model["path"]
+    else:
+        selected_model_name = selected_model["name"]
+        selected_model_path = selected_model["path"]
     interface_choice = choose_interface(default_interface)
     exec_mode = choose_exec_mode(default_exec_mode)
+
+if external_model is not None:
+    selected_model_name = selected_model["name"]
+    selected_model_path = selected_model["path"]
 
 profile = onboarding_profile.update_profile(profile, selected_model_name, interface_choice, exec_mode)
 onboarding_profile.save_profile(profile)

@@ -54,11 +54,12 @@ def is_first_run(profile: Dict[str, Any]) -> bool:
     return not bool(profile.get("onboarding_complete"))
 
 
-def resolve_default_model(profile: Dict[str, Any], models: List[str]) -> str:
+def resolve_default_model(profile: Dict[str, Any], models: List[Any]) -> str:
     preferred = str(profile.get("preferred_model", "")).strip()
-    if preferred and preferred in models:
+    model_names = [m["name"] if isinstance(m, dict) else str(m) for m in models]
+    if preferred and preferred in model_names:
         return preferred
-    return models[0] if models else ""
+    return model_names[0] if model_names else ""
 
 
 def resolve_default_interface(profile: Dict[str, Any]) -> str:
@@ -77,6 +78,8 @@ def has_latest_session() -> bool:
 
 def update_profile(profile: Dict[str, Any], model: str, interface: str, exec_mode: str) -> Dict[str, Any]:
     profile["onboarding_complete"] = True
+    if model.endswith(".gguf"):
+        model = model[:-5]
     profile["preferred_model"] = model
     profile["preferred_interface"] = interface
     profile["preferred_exec_mode"] = exec_mode
