@@ -29,13 +29,12 @@ DEFAULT_MODELS = {
     "1": {
         "name": "GPT-OSS-20B",
         "repo": "DavidAU/OpenAi-GPT-oss-20b-abliterated-uncensored-NEO-Imatrix-gguf",
-        "filename": "gpt-oss-20b-IQ4_NL.gguf",
+        "filename": "OpenAI-20B-NEOPlus-Uncensored-IQ4_NL.gguf",
     },
     "2": {
         "name": "Qwen3.5-9B-Uncensored",
         "repo": "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive",
         "filename": "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
-        "url": "https://huggingface.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf?download=true",
     },
 }
 

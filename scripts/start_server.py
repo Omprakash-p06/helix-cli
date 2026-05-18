@@ -84,6 +84,13 @@ def apply_runtime_overrides():
 def resolve_runtime_model():
     model_path = os.environ.get("HELIX_MODEL_PATH", "").strip() or config.MODEL_PATH
     model_name = os.environ.get("HELIX_MODEL_NAME", "").strip() or getattr(config, "MODEL_NAME", os.path.basename(model_path))
+    if model_name:
+        profile = config.build_model_entry(model_name, config.DETECTED_VRAM_GB)
+        config.GPU_LAYERS = profile["gpu_layers"]
+        config.BACKEND_HINT = profile["backend_hint"]
+        config.CONTEXT_SIZE = profile["context_size"]
+        config.BATCH_SIZE = profile["batch_size"]
+        config.UBATCH_SIZE = profile["ubatch_size"]
     return model_name, model_path
 
 

@@ -355,8 +355,8 @@ pub fn tier_allows_tool(tier: PermissionTier, tool_name: &str) -> bool {
 }
 
 pub fn evaluate_tool_call(tool_name: &str, args: &Value, ctx: &PolicyContext) -> PolicyDecision {
-    if !tier_allows_tool(ctx.permission_tier, tool_name)
-        && !(ctx.trust_level == TrustLevel::Safe && safe_mode_can_bypass_tier(tool_name))
+    if !(tier_allows_tool(ctx.permission_tier, tool_name)
+        || ctx.trust_level == TrustLevel::Safe && safe_mode_can_bypass_tier(tool_name))
     {
         return PolicyDecision::Deny {
             reason_code: "TIER_DENY".to_string(),

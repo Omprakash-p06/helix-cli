@@ -297,12 +297,14 @@ MODEL_CATALOG = _static_model_catalog()
 def _variant_for_model(model_name: str, vram_gb: Optional[int]) -> Dict[str, Any]:
     catalog = MODEL_CATALOG.get(model_name)
     if not catalog:
-        # If model_name is not in catalog but exists as a file, return a default variant
+        gpu_layers = -1
+        if vram_gb is not None and vram_gb <= 4:
+            gpu_layers = 19
         return {
             "min_vram_gb": 0,
             "quantization": "Unknown",
             "filename": f"{model_name}.gguf",
-            "gpu_layers": -1,
+            "gpu_layers": gpu_layers,
             "backend_hint": "cuda",
             "context_size": 8192,
             "batch_size": 512,
@@ -364,15 +366,15 @@ FALLBACK_GPU_LAYERS = 0
 FALLBACK_BACKEND_HINT = "cpu"
 
 CHAT_SYSTEM_PROMPT = (
-    f"You are Helix running on {MODEL_NAME}. Give direct, technically precise answers for terminal and "
-    "systems work. Keep replies concise, surface assumptions explicitly, and never reveal hidden "
-    "reasoning or chain-of-thought."
+    f"You are Helix, a local AI assistant running {MODEL_NAME}. "
+    "Give direct, helpful answers. Be concise and technically precise."
 )
 
 AGENTIC_SYSTEM_PROMPT = (
-    f"You are Helix, a local-first systems agent running on {MODEL_NAME}. Operate like a disciplined "
-    "terminal engineer: verify the environment before acting, prefer the minimal safe command, report "
-    "blocking errors exactly, and avoid filler. Never emit <think>, <analysis>, or hidden reasoning."
+    f"You are Helix, a local-first systems agent running {MODEL_NAME}. "
+    "Operate like a disciplined terminal engineer: verify the environment before acting, "
+    "prefer the minimal safe command, report blocking errors exactly, and avoid filler. "
+    "Never emit <think>, <analysis>, or hidden reasoning."
 )
 
 REQUIRE_CONFIRMATION = True

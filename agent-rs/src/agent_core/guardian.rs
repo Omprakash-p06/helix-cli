@@ -95,7 +95,7 @@ impl Guardian {
         let verdict = match action.risk_level {
             RiskLevel::Low | RiskLevel::Medium => VoteVerdict::Allow,
             RiskLevel::High => {
-                if specialist_id % 4 == 0 { VoteVerdict::Deny } else { VoteVerdict::Allow }
+                if specialist_id.is_multiple_of(4) { VoteVerdict::Deny } else { VoteVerdict::Allow }
             }
             RiskLevel::Critical => {
                 if specialist_id == 0 { VoteVerdict::Allow } else { VoteVerdict::Deny }

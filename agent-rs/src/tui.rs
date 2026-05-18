@@ -303,11 +303,10 @@ impl TuiApp {
             let cmds = commands::default_commands();
 
             // Check registry names for inline ghost text first.
-            if let Some(cmd) = commands::match_partial(&cmds, current) {
-                if cmd.name.starts_with(current) && cmd.name != current {
+            if let Some(cmd) = commands::match_partial(&cmds, current)
+                && cmd.name.starts_with(current) && cmd.name != current {
                     return Some(cmd.name[current.len()..].to_string());
                 }
-            }
 
             // Then check legacy slash commands.
             for cmd in SLASH_COMMANDS {

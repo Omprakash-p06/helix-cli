@@ -54,6 +54,7 @@ impl ToolRuntime {
 
     /// Executes a single tool with standard lifecycle and audit hooks.
     /// Returns the tool result and the call ID.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
         req: ToolRequest,
@@ -127,6 +128,7 @@ impl ToolRuntime {
         (id, result, func_name)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_sync(
         &self,
         req: ToolRequest,

@@ -27,6 +27,22 @@ TRUSTED_MODELS: Dict[str, Dict[str, Any]] = {
         "sha256": None,
         "verification_status": "blocked-until-pinned",
     },
+    "gpt-oss-20b": {
+        "name": "GPT-OSS-20B",
+        "repo": "DavidAU/OpenAi-GPT-oss-20b-abliterated-uncensored-NEO-Imatrix-gguf",
+        "filename": "OpenAI-20B-NEOPlus-Uncensored-IQ4_NL.gguf",
+        "quantizations": ["IQ4_NL"],
+        "revision": "92d1bcc0244193a2cd11b9da138dfee9e5203d37",
+        "sha256": "274ffaaf0783270c071006842ffe60af73600fc63c2b6153c0701b596fc3b122",
+    },
+    "qwen-9b": {
+        "name": "Qwen3.5-9B-Uncensored",
+        "repo": "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive",
+        "filename": "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+        "quantizations": ["Q4_K_M"],
+        "revision": "335e9ef38ada3edf9f9a3a6c2836022c1ab76ea1",
+        "sha256": "2ca636d9e81d3d23ca9b60c234fe185d30ec082eeba69ce770fdb0c76559a4f5",
+    },
 }
 
 PROJECT_DIR = Path(__file__).parent.parent.absolute()

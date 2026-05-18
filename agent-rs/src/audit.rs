@@ -74,6 +74,7 @@ impl AuditStore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn append_event(
         &self,
         actor: &str,

@@ -271,7 +271,7 @@ impl ThemeManager {
         TuiEvent::ThemeChanged(theme)
     }
 
-    pub fn next(&mut self) -> TuiEvent {
+    pub fn cycle_theme(&mut self) -> TuiEvent {
         self.switch_to(self.current.next())
     }
 }
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn theme_manager_next_emits_theme_changed_event() {
         let mut manager = ThemeManager::new();
-        let event = manager.next();
+        let event = manager.cycle_theme();
         assert!(matches!(event, TuiEvent::ThemeChanged(ThemeName::Light)));
     }
 

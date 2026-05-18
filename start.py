@@ -320,6 +320,8 @@ try:
     agent_env = os.environ.copy()
     agent_env["HELIX_EXEC_MODE"] = exec_mode
     agent_env["HELIX_UI_MODE"] = interface_choice
+    agent_env["HELIX_MODEL_NAME"] = selected_model_name
+    agent_env["HELIX_MODEL_PATH"] = selected_model_path
 
     if interface_choice == "web":
         print("  [i] Booting Rust API and Vite Dev Server...")

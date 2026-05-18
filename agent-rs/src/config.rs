@@ -41,22 +41,54 @@ try:
 
     import config
 
+    # Honour the model selected at launch — rebuild the profile for that model
+    # so GPU_LAYERS, BACKEND_HINT, and CONTEXT_SIZE are correct.
+    helix_model_name = os.environ.get('HELIX_MODEL_NAME', '').strip()
+    if helix_model_name:
+        profile = config.build_model_entry(helix_model_name, config.DETECTED_VRAM_GB)
+        effective_model_name = helix_model_name
+        # Re-derive runtime settings from the selected model's profile
+        gpu_layers = profile['gpu_layers']
+        backend_hint = profile['backend_hint']
+        context_size = profile['context_size']
+        batch_size = profile['batch_size']
+        ubatch_size = profile['ubatch_size']
+    else:
+        effective_model_name = getattr(config, 'MODEL_NAME', 'local-model')
+        gpu_layers = getattr(config, 'GPU_LAYERS', 0)
+        backend_hint = getattr(config, 'BACKEND_HINT', 'cpu')
+        context_size = getattr(config, 'CONTEXT_SIZE', 8192)
+        batch_size = getattr(config, 'BATCH_SIZE', 512)
+        ubatch_size = getattr(config, 'UBATCH_SIZE', 256)
+
+    # Rebuild prompts using the effective model name so they are accurate
+    chat_prompt = (
+        f'You are Helix, a local AI assistant running {effective_model_name}. '
+        'Give direct, helpful answers. Be concise and technically precise.'
+    )
+    agentic_prompt = (
+        f'You are Helix, a local-first systems agent running {effective_model_name}. '
+        'Operate like a disciplined terminal engineer: verify the environment before acting, '
+        'prefer the minimal safe command, report blocking errors exactly, and avoid filler. '
+        'Never emit <think>, <analysis>, or hidden reasoning.'
+    )
+
     data = {
-        "base_url": getattr(config, 'BASE_URL', 'http://127.0.0.1:8080/v1'),
-        "model_name": getattr(config, 'MODEL_NAME', 'gpt-oss-20b'),
-        "context_size": getattr(config, 'CONTEXT_SIZE', 8192),
-        "require_confirmation": getattr(config, 'REQUIRE_CONFIRMATION', True),
-        "dangerous_commands": getattr(config, 'DANGEROUS_COMMANDS', ["rm", "mv"]),
-        "exec_mode": os.environ.get("HELIX_EXEC_MODE", "chat"),
-        "chat_system_prompt": getattr(config, 'CHAT_SYSTEM_PROMPT', 'You are Helix running in chat mode. Reply directly and concisely. Never expose internal reasoning, analysis, or chain-of-thought. Do not output <think>, <thinking>, or <analysis> tags.'),
-        "agentic_system_prompt": getattr(config, 'AGENTIC_SYSTEM_PROMPT', 'You are an autonomous local system orchestrator. You execute tasks using provided tools. Before each tool call, state your reasoning in one sentence. Never guess file paths - verify with list_directory first. If a command fails, read STDERR and retry with a corrected approach. Do not greet the user. Do not introduce yourself. Do not use conversational filler. Be concise. You have local tool access through these tools, so do not ask the user to run local file-system commands when a tool can do it.'),
-        "tool_permission_tier": getattr(config, 'TOOL_PERMISSION_TIER', 'workspace_write'),
-        "audit_enabled": getattr(config, 'AUDIT_ENABLED', True),
-        "audit_db_path": getattr(config, 'AUDIT_DB_PATH', 'logs/audit.db'),
+        'base_url': getattr(config, 'BASE_URL', 'http://127.0.0.1:8080/v1'),
+        'model_name': effective_model_name,
+        'context_size': context_size,
+        'require_confirmation': getattr(config, 'REQUIRE_CONFIRMATION', True),
+        'dangerous_commands': getattr(config, 'DANGEROUS_COMMANDS', ['rm', 'mv']),
+        'exec_mode': os.environ.get('HELIX_EXEC_MODE', 'chat'),
+        'chat_system_prompt': getattr(config, 'CHAT_SYSTEM_PROMPT', chat_prompt),
+        'agentic_system_prompt': getattr(config, 'AGENTIC_SYSTEM_PROMPT', agentic_prompt),
+        'tool_permission_tier': getattr(config, 'TOOL_PERMISSION_TIER', 'workspace_write'),
+        'audit_enabled': getattr(config, 'AUDIT_ENABLED', True),
+        'audit_db_path': getattr(config, 'AUDIT_DB_PATH', 'logs/audit.db'),
     }
     print(json.dumps(data))
 except Exception as e:
-    print(json.dumps({"error": str(e)}))
+    print(json.dumps({'error': str(e)}))
 "#;
 
         let output = Command::new("python")

@@ -59,6 +59,7 @@ pub struct ContextResponse {
     pub git_branch: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_web_server(
     app_config: AppConfig,
     _persona: String,

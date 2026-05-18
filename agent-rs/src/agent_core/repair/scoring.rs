@@ -1,6 +1,6 @@
-/// Bayesian Confidence Scoring for Diagnostic Hypotheses
-/// 
-/// Logic: Confidence = (Token Probs * Tool Reliability) - Information Gap
+//! Bayesian Confidence Scoring for Diagnostic Hypotheses
+//!
+//! Logic: Confidence = (Token Probs * Tool Reliability) - Information Gap
 
 pub fn calculate_confidence(
     token_probs: f64, 
