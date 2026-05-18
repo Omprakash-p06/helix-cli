@@ -299,7 +299,7 @@ def _variant_for_model(model_name: str, vram_gb: Optional[int]) -> Dict[str, Any
     if not catalog:
         gpu_layers = -1
         if vram_gb is not None and vram_gb <= 4:
-            gpu_layers = 19
+            gpu_layers = 12
         return {
             "min_vram_gb": 0,
             "quantization": "Unknown",
