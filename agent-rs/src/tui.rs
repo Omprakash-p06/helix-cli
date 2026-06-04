@@ -940,8 +940,9 @@ fn push_multiline_plain_entry(
     prefix_style: Style,
     content: &str,
 ) {
+    let clean_content = content.trim_start_matches(|c| c == '\r' || c == '\n');
     let continuation_prefix = " ".repeat(prefix.chars().count());
-    let mut segments = content.split('\n');
+    let mut segments = clean_content.split('\n');
 
     if let Some(first_segment) = segments.next() {
         lines.push(Line::from(Span::styled(
@@ -972,12 +973,23 @@ fn push_multiline_spans_entry(
         vec![Span::styled(prefix.to_string(), prefix_style)];
     let mut has_visible_content = false;
 
+    let mut is_first_visible_text = true;
+
     for chat_span in spans {
         if !show_thoughts && is_think_span(chat_span) {
             continue;
         }
 
-        let mut remaining = chat_span.text.as_str();
+        let mut text_val = chat_span.text.as_str();
+        if is_first_visible_text {
+            text_val = text_val.trim_start_matches(|c| c == '\r' || c == '\n');
+            if text_val.is_empty() {
+                continue;
+            }
+            is_first_visible_text = false;
+        }
+
+        let mut remaining = text_val;
         loop {
             if let Some(newline_idx) = remaining.find('\n') {
                 let segment = &remaining[..newline_idx];

@@ -21,7 +21,7 @@ def test_first_run_profile_creation(tmp_path: Path, monkeypatch):
 
     loaded = op.load_profile()
     assert loaded["onboarding_complete"] is True
-    assert loaded["preferred_model"] == "model.gguf"
+    assert loaded["preferred_model"] == "model"
     assert loaded["preferred_interface"] == "tui"
     assert loaded["preferred_exec_mode"] == "agentic"
 

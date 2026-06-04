@@ -1078,7 +1078,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                      }
                                 }
                                 _ => {
-                                     let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Unknown command: {}", cmd_raw)));
+                                     let args: Vec<&str> = parts[1..].to_vec();
+                                     let sdk_cmd = match subcmd {
+                                         "new-project" => "init",
+                                         _ => "auto",
+                                     };
+                                     let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD] Running {}...", cmd_raw)));
+                                     let output = std::process::Command::new("gsd-sdk")
+                                        .arg(sdk_cmd)
+                                        .args(&args)
+                                        .arg("--model")
+                                        .arg(&app_config.model_name)
+                                        .output();
+                                     match output {
+                                        Ok(o) => {
+                                            let combined = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(combined));
+                                        }
+                                        Err(e) => {
+                                            let _ = event_tx.send(tui::TuiEvent::SystemMessage(format!("[GSD Error] Failed to run gsd-sdk: {}", e)));
+                                        }
+                                     }
                                 }
                             }
                         }

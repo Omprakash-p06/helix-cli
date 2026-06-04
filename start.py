@@ -146,17 +146,6 @@ def ask_yes_no(prompt, default_yes=True):
 models_dir = os.path.join(PROJECT_DIR, "models")
 models = discover_models(models_dir)
 external_model = resolve_env_model(models)
-if external_model is not None:
-    selected_model = external_model
-else:
-    if not models:
-        print("  [!] No GGUF models were discovered in models/.")
-        sys.exit(1)
-
-    if len(models) == 1:
-        selected_model = models[0]
-    else:
-        selected_model = choose_model(models, choose_default_model(models))
 
 profile = onboarding_profile.load_profile()
 first_run = onboarding_profile.is_first_run(profile)
@@ -173,29 +162,49 @@ if first_run:
     print("  - Safe defaults are applied and persisted after this first run.")
     use_defaults = False
 else:
-    use_defaults = ask_yes_no(
-        f"Use saved defaults ({default_model_name}, {default_interface}, {default_exec_mode})?",
-        default_yes=True,
-    )
-
-if use_defaults:
-    selected_model_name = default_model_name
-    selected_model_path = os.path.join(models_dir, f"{selected_model_name}.gguf")
-    interface_choice = default_interface
-    exec_mode = default_exec_mode
-else:
     if external_model is not None:
-        selected_model_name = selected_model["name"]
-        selected_model_path = selected_model["path"]
+        use_defaults = ask_yes_no(
+            f"Use saved interface default ({default_interface})?",
+            default_yes=True,
+        )
     else:
-        selected_model_name = selected_model["name"]
-        selected_model_path = selected_model["path"]
-    interface_choice = choose_interface(default_interface)
-    exec_mode = choose_exec_mode(default_exec_mode)
+        use_defaults = ask_yes_no(
+            f"Use saved defaults ({default_model_name}, {default_interface})?",
+            default_yes=True,
+        )
 
 if external_model is not None:
-    selected_model_name = selected_model["name"]
-    selected_model_path = selected_model["path"]
+    selected_model_name = external_model["name"]
+    selected_model_path = external_model["path"]
+    if use_defaults:
+        interface_choice = default_interface
+    else:
+        interface_choice = choose_interface(default_interface)
+else:
+    if not models:
+        print("  [!] No GGUF models were discovered in models/.")
+        sys.exit(1)
+
+    if use_defaults:
+        matched_model = next((m for m in models if m["name"] == default_model_name), None)
+        if matched_model:
+            selected_model_name = matched_model["name"]
+            selected_model_path = matched_model["path"]
+        else:
+            selected_model_name = default_model_name
+            selected_model_path = os.path.join(models_dir, f"{selected_model_name}.gguf")
+        interface_choice = default_interface
+    else:
+        if len(models) == 1:
+            selected_model = models[0]
+        else:
+            default_model = next((m for m in models if m["name"] == default_model_name), None)
+            selected_model = choose_model(models, default_model)
+        selected_model_name = selected_model["name"]
+        selected_model_path = selected_model["path"]
+        interface_choice = choose_interface(default_interface)
+
+exec_mode = choose_exec_mode(default_exec_mode)
 
 profile = onboarding_profile.update_profile(profile, selected_model_name, interface_choice, exec_mode)
 onboarding_profile.save_profile(profile)
