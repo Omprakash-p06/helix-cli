@@ -50,15 +50,14 @@ Phase 06 (Autonomous "Fix It" Mode & Multi-agent Voting) has been validated with
 | GSD-03: Guardian multi-agent voting | 06-02 | 12 tests | COVERED |
 | SEC-05: Blocklist non-bypassable | 06-03 | 6 tests | COVERED |
 
-## Validation Audit 2026-05-08
+## Validation Audit 2026-07-25
 
 | Metric | Count |
 |--------|-------|
 | Requirements mapped | 3 |
 | Gaps found | 0 |
 | Resolved | 0 |
-| Tests added | 12 (guardian module) |
-| Total tests passing | 28 |
+| Total tests passing | 96 |
 
 ## Manual-Only
 
@@ -66,5 +65,5 @@ None — all requirements have automated verification.
 
 ## Sign-Off
 
-Validated: 2026-05-08
-Tests: `cargo test -p agent-rs --lib` (88 tests total, all passing)
+Validated: 2026-07-25
+Tests: `cargo test` (96 tests total, 100% passing)
