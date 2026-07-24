@@ -64,3 +64,21 @@ pub enum Provenance {
     Untrusted,
 }
 
+/// Associates content with its provenance for trust-aware context assembly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentSource {
+    pub content: String,
+    pub provenance: Provenance,
+}
+
+/// Filters out content from Untrusted sources.
+/// Used during context assembly to prevent untrusted data from reaching
+/// system prompt or tool schema positions.
+pub fn provenance_filter(sources: &[ContentSource]) -> Vec<ContentSource> {
+    sources
+        .iter()
+        .filter(|s| s.provenance != Provenance::Untrusted)
+        .cloned()
+        .collect()
+}
+

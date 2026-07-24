@@ -1,4 +1,4 @@
-use crate::types::ChatMessage;
+use crate::types::{ChatMessage, ContentSource};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -16,6 +16,8 @@ pub struct SessionEnvelope {
     pub exec_mode: String,
     pub ui_mode: String,
     pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub content_sources: Vec<ContentSource>,
 }
 
 impl SessionEnvelope {
@@ -29,6 +31,7 @@ impl SessionEnvelope {
             exec_mode: exec_mode.to_string(),
             ui_mode: ui_mode.to_string(),
             messages: messages.to_vec(),
+            content_sources: vec![],
         }
     }
 }

@@ -110,3 +110,130 @@ impl Watchdog {
         }
     }
 }
+
+/// Errors that can occur during process management operations.
+#[derive(Debug)]
+pub enum ProcessError {
+    Io(std::io::Error),
+    Parse(String),
+    Ownership(String),
+    Serde(serde_json::Error),
+}
+
+impl std::fmt::Display for ProcessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProcessError::Io(e) => write!(f, "IO error: {}", e),
+            ProcessError::Parse(e) => write!(f, "Parse error: {}", e),
+            ProcessError::Ownership(e) => write!(f, "Ownership error: {}", e),
+            ProcessError::Serde(e) => write!(f, "Serde error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for ProcessError {}
+
+/// Reads the server PID file and returns the ProcessOwnership if it exists.
+///
+/// The PID file is expected at `<workspace>/.helix/server.pid` as JSON.
+pub fn read_server_pid(workspace: &std::path::Path) -> Result<ProcessOwnership, ProcessError> {
+    let pid_path = workspace.join(".helix").join("server.pid");
+    let data = std::fs::read_to_string(&pid_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ProcessError::Ownership(format!(
+                "PID file not found at {}. No server is registered as owned by this agent.",
+                pid_path.display()
+            ))
+        } else {
+            ProcessError::Io(e)
+        }
+    })?;
+    serde_json::from_str(&data).map_err(ProcessError::Serde)
+}
+
+/// Writes a ProcessOwnership record to `<workspace>/.helix/server.pid`.
+pub fn write_server_pid(
+    workspace: &std::path::Path,
+    ownership: &ProcessOwnership,
+) -> Result<(), ProcessError> {
+    let helix_dir = workspace.join(".helix");
+    std::fs::create_dir_all(&helix_dir).map_err(ProcessError::Io)?;
+    let pid_path = helix_dir.join("server.pid");
+    let data = serde_json::to_string_pretty(ownership).map_err(ProcessError::Serde)?;
+    std::fs::write(&pid_path, data).map_err(ProcessError::Io)?;
+    Ok(())
+}
+
+/// Determines whether a process identified by `ownership` should be terminated.
+///
+/// Only returns `true` if:
+/// 1. `ownership.started_by` is `"helix-agent"` (or the configured agent name)
+/// 2. The process is not a foreign/unowned process
+pub fn should_kill(ownership: &ProcessOwnership, agent_name: &str) -> bool {
+    ownership.started_by == agent_name
+}
+
+/// Sends SIGTERM on Unix via the `kill` command.
+fn send_terminate_signal(pid: u32) -> Result<(), ProcessError> {
+    let status = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .map_err(ProcessError::Io)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ProcessError::Ownership(format!(
+            "kill command returned non-zero for PID {}",
+            pid
+        )))
+    }
+}
+
+/// Safely terminates a process identified by the given PID, but only after
+/// verifying ownership via the PID file.
+///
+/// Returns `Ok(true)` if the process was terminated, `Ok(false)` if the
+/// process was not running or didn't need termination, or `Err` if
+/// ownership verification failed or the terminate signal failed.
+///
+/// This function follows the safety contract from P1-4:
+/// - Reads `.helix/server.pid` to get the ProcessOwnership record
+/// - Verifies `started_by == "helix-agent"` before sending any signal
+/// - Returns `Err(ProcessError::Ownership(...))` for foreign processes
+pub fn terminate(
+    pid: u32,
+    workspace: &std::path::Path,
+    agent_name: &str,
+) -> Result<bool, ProcessError> {
+    let ownership = read_server_pid(workspace)?;
+
+    if !should_kill(&ownership, agent_name) {
+        return Err(ProcessError::Ownership(format!(
+            "Refusing to terminate PID {}: process was started by '{}', not '{}'. \
+             This is a foreign process — the watchdog must not kill it.",
+            pid, ownership.started_by, agent_name
+        )));
+    }
+
+    if ownership.pid != pid {
+        return Err(ProcessError::Ownership(format!(
+            "PID mismatch: server.pid records PID {} but terminate was called for PID {}. \
+             Refusing to terminate — the ownership record does not match.",
+            ownership.pid, pid
+        )));
+    }
+
+    send_terminate_signal(pid)?;
+    Ok(true)
+}
+
+/// Checks whether a TCP port is available by attempting to bind to it.
+/// Used after recovery to verify the old server has released the port.
+pub fn is_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(std::net::SocketAddrV4::new(
+        std::net::Ipv4Addr::LOCALHOST,
+        port,
+    ))
+    .is_ok()
+}
