@@ -160,9 +160,10 @@ const SHELL_METACHARACTERS: &[char] = &[
 const DIAGNOSTIC_PATH_ALLOWLIST: &[&str] = &[
     "/etc",
     "/var/log",
-    "/proc",
-    "/sys",
-    "/run",
+    "/proc/cpuinfo",
+    "/proc/meminfo",
+    "/proc/loadavg",
+    "/sys/class/thermal",
     "/Library/Logs", // macOS
     "/var/db/diagnostics", // macOS
 ];
@@ -355,9 +356,7 @@ pub fn tier_allows_tool(tier: PermissionTier, tool_name: &str) -> bool {
 }
 
 pub fn evaluate_tool_call(tool_name: &str, args: &Value, ctx: &PolicyContext) -> PolicyDecision {
-    if !(tier_allows_tool(ctx.permission_tier, tool_name)
-        || ctx.trust_level == TrustLevel::Safe && safe_mode_can_bypass_tier(tool_name))
-    {
+    if !tier_allows_tool(ctx.permission_tier, tool_name) {
         return PolicyDecision::Deny {
             reason_code: "TIER_DENY".to_string(),
             message: format!(
@@ -410,19 +409,6 @@ pub fn tool_risk_level(tool_name: &str) -> RiskLevel {
         "run_terminal_command" => RiskLevel::High,
         _ => RiskLevel::High,
     }
-}
-
-fn safe_mode_can_bypass_tier(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "write_file"
-            | "append_file"
-            | "edit_file"
-            | "run_terminal_command"
-            | "service_repair"
-            | "package_repair"
-            | "permission_repair"
-    )
 }
 
 pub fn evaluate_command_risk(args: &Value, ctx: &PolicyContext) -> PolicyDecision {
@@ -637,7 +623,7 @@ mod tests {
                 &safe_ctx,
             );
 
-            assert!(matches!(decision, PolicyDecision::RequireApproval { reason_code, .. } if reason_code == "TRUST_LEVEL_APPROVAL"));
+            assert!(matches!(decision, PolicyDecision::Deny { reason_code, .. } if reason_code == "TIER_DENY"));
         }
 
         #[test]

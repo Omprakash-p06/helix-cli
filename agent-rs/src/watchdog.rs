@@ -1,5 +1,15 @@
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessOwnership {
+    pub pid: u32,
+    pub port: u16,
+    pub started_by: String,  // e.g., "helix-agent"
+    pub start_time_unix: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchdogState {
     Healthy,

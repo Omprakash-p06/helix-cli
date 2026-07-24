@@ -29,6 +29,63 @@ pub struct SystemProvider {
     sys: System,
 }
 
+const DIAGNOSTIC_ALLOWLIST: &[(&str, usize)] = &[
+    ("/etc", 524_288),           // 512 KB
+    ("/var/log", 1_048_576),     // 1 MB
+    ("/proc/cpuinfo", 65_536),   // 64 KB
+    ("/proc/meminfo", 65_536),
+    ("/proc/loadavg", 1_024),
+    ("/sys/class/thermal", 8_192),
+    ("/Library/Logs", 1_048_576), // macOS
+];
+
+pub fn redact_secrets(content: &str) -> String {
+    let mut redacted = content.to_string();
+
+    // Redact standard API keys and tokens
+    let patterns = [
+        r"sk-[a-zA-Z0-9]{20,}",
+        r"ghp_[a-zA-Z0-9]{36}",
+        r"AKIA[A-Z0-9]{16}",
+        r"-----BEGIN [A-Z ]+ PRIVATE KEY-----",
+    ];
+
+    for pat in patterns {
+        if let Ok(re) = regex::Regex::new(pat) {
+            redacted = re.replace_all(&redacted, "[REDACTED_SECRET]").to_string();
+        }
+    }
+
+    redacted
+}
+
+pub fn read_diagnostic_file(path_str: &str) -> Result<String, String> {
+    let path = std::path::Path::new(path_str);
+    let mut allowed_limit: Option<usize> = None;
+
+    for &(prefix, max_bytes) in DIAGNOSTIC_ALLOWLIST {
+        if path.starts_with(prefix) {
+            allowed_limit = Some(max_bytes);
+            break;
+        }
+    }
+
+    let Some(limit) = allowed_limit else {
+        return Err(format!("Path '{}' is not in diagnostic allowlist.", path_str));
+    };
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read diagnostic file: {}", e))?;
+
+    let truncated = if content.len() > limit {
+        &content[..limit]
+    } else {
+        &content
+    };
+
+    Ok(redact_secrets(truncated))
+}
+
 impl Default for SystemProvider {
     fn default() -> Self {
         Self::new()

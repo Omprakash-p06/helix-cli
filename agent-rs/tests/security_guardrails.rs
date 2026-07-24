@@ -37,3 +37,35 @@ fn read_only_tier_has_documented_config_hook() {
     assert!(cfg_py.contains("TOOL_PERMISSION_TIER"));
     assert!(cfg_py.contains("workspace_write"));
 }
+
+#[test]
+fn test_capabilities_module_available() {
+    use agent_rs::security::capabilities::{Capability, CapabilitySet};
+
+    let set = CapabilitySet::read_only();
+    assert!(set.has(Capability::ReadFile));
+    assert!(set.has(Capability::SystemDiagnostic));
+    assert!(!set.has(Capability::WriteFile));
+    assert!(!set.has(Capability::ExecuteSandboxed));
+}
+
+#[test]
+fn test_provenance_enum_available() {
+    use agent_rs::types::Provenance;
+
+    let prov = Provenance::Workspace;
+    assert_eq!(prov, Provenance::Workspace);
+    assert_ne!(prov, Provenance::Untrusted);
+}
+
+#[test]
+fn test_redact_secrets_filters_keys() {
+    use agent_rs::agent_core::diagnostics::system::redact_secrets;
+
+    let raw = "API key: sk-abcdef12345678901234567890 and AWS: AKIAIOSFODNN7EXAMPLE";
+    let redacted = redact_secrets(raw);
+    assert!(!redacted.contains("sk-abcdef"));
+    assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
+    assert!(redacted.contains("[REDACTED_SECRET]"));
+}
+

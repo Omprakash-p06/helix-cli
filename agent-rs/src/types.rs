@@ -48,3 +48,19 @@ pub enum PermissionResponse {
 pub trait PermissionRequester: Send + Sync {
     async fn request_permission(&self, request: PermissionRequest) -> PermissionResponse;
 }
+
+/// Tracks the origin/trust level of content in the agent context.
+/// The agent core uses this to prevent Untrusted content from being placed
+/// in system-prompt or tool-schema positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Provenance {
+    /// Files and content from inside the configured workspace root
+    Workspace,
+    /// Built-in system prompts and tool definitions
+    System,
+    /// Content fetched by the research agent (cited, summarized)
+    Research,
+    /// Raw external content (web pages, user-supplied URLs, unverified files)
+    Untrusted,
+}
+

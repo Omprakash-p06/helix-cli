@@ -11,6 +11,12 @@ use crate::audit::{self, AuditStore};
 use crate::types::{PermissionRequest, PermissionResponse, PermissionRequester};
 use crate::agent_core::repair::workflow::SafetyLoop;
 
+pub const INTERPRETER_COMMANDS: &[&str] = &[
+    "python", "python3", "node", "npm", "npx", "cargo", "pip", "pip3",
+    "sh", "bash", "zsh", "fish", "ruby", "perl", "make", "gradle", "mvn",
+    "go", "dotnet", "java", "javac",
+];
+
 /// Structured tool result with deterministic success signal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -386,7 +392,7 @@ mod tests {
         };
 
         let ctx = PolicyContext {
-            permission_tier: PermissionTier::ReadOnly,
+            permission_tier: PermissionTier::FullExec,
             trust_level: crate::security::policy::TrustLevel::Safe,
             exec_mode: "test".to_string(),
             workspace_root: std::env::temp_dir(),
@@ -430,7 +436,7 @@ mod tests {
         };
 
         let ctx = PolicyContext {
-            permission_tier: PermissionTier::ReadOnly,
+            permission_tier: PermissionTier::FullExec,
             trust_level: crate::security::policy::TrustLevel::Safe,
             exec_mode: "test".to_string(),
             workspace_root: std::env::temp_dir(),
@@ -488,7 +494,7 @@ mod tests {
         };
 
         let ctx = PolicyContext {
-            permission_tier: PermissionTier::ReadOnly,
+            permission_tier: PermissionTier::FullExec,
             trust_level: crate::security::policy::TrustLevel::Safe,
             exec_mode: "test".to_string(),
             workspace_root: std::env::temp_dir(),

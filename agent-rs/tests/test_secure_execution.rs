@@ -117,3 +117,25 @@ async fn secure_runtime_logs_safe_and_blocked_commands() {
 
     let _ = std::fs::remove_file(audit_path);
 }
+
+#[test]
+fn test_no_safe_mode_write_bypass() {
+    use agent_rs::security::policy::{evaluate_tool_call, PolicyDecision};
+
+    let ctx = PolicyContext {
+        permission_tier: PermissionTier::ReadOnly,
+        trust_level: TrustLevel::Safe,
+        exec_mode: "agentic".to_string(),
+        workspace_root: PathBuf::from("."),
+    };
+
+    for dangerous_tool in &["write_file", "run_terminal_command", "service_repair"] {
+        let decision = evaluate_tool_call(dangerous_tool, &json!({}), &ctx);
+        assert!(
+            !matches!(decision, PolicyDecision::Allow),
+            "Tool {} must not be allowed in ReadOnly+Safe mode",
+            dangerous_tool
+        );
+    }
+}
+

@@ -16,8 +16,25 @@ pub struct AppConfig {
     pub tool_permission_tier: String,
     pub audit_enabled: bool,
     pub audit_db_path: String,
+    #[serde(default = "default_sandbox_interpreters")]
+    pub sandbox_interpreters: bool,
     #[serde(skip)]
     pub permission_tier: PermissionTier,
+    #[serde(skip)]
+    pub backend_capabilities: BackendCapabilities,
+}
+
+fn default_sandbox_interpreters() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize, Default)]
+pub struct BackendCapabilities {
+    pub function_calling: bool,
+    pub streaming: bool,
+    pub grammar_sampling: bool,
+    pub context_window: u32,
+    pub model_id: String,
 }
 
 impl AppConfig {
