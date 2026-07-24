@@ -55,9 +55,11 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 *   **Plans:** 3 plans (06-01 through 06-03)
 *   **Success Metrics:** 95% diagnostic accuracy; 0% catastrophic failures in 1000+ test runs.
 
-## [ ] Phase 07: Security Hardening & Logical Vulnerability Remediation
+## [x] Phase 07: Security Hardening & Logical Vulnerability Remediation
 **Goal:** Close the P0 and P1 logical security gaps identified in the vulnerability audit — make ToolRuntime the single execution gateway, enforce absolute capability boundaries, harden interpreter/build-tool execution paths, and add adversarial regression tests.
-**Success Metrics:** Zero bypass paths exist from any tool to unsandboxed interpreter/build execution; ReadOnly is an absolute incapability (no write/exec bypass); all security guardrail tests pass including adversarial path-traversal and command-injection scenarios; new `capabilities` module replaces persona-name-based policy checks.
+*   **Status:** COMPLETED (1 plan)
+*   **Plans:** 1 plan (07-01)
+*   **Success Metrics:** Zero bypass paths exist from any tool to unsandboxed interpreter/build execution; ReadOnly is an absolute incapability (no write/exec bypass); all security guardrail tests pass including adversarial path-traversal and command-injection scenarios; new `capabilities` module replaces persona-name-based policy checks.
 
 ## [ ] Phase 08: Repository Map & Context Engineering Layer
 **Goal:** Build a hierarchical context system — Tree-sitter/LSP symbol extraction, dependency graph, just-in-time retrieval, and a durable agent memory layer — so the agent can reason over large codebases without concatenating raw files into the prompt.
