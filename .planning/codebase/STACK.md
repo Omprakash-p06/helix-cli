@@ -1,76 +1,46 @@
 # Technology Stack
 
-**Analysis Date:** 2025-05-15
+**Last Updated:** 2026-07-24
 
-## Languages
+## Overview
+Helix CLI is an autonomous local troubleshooting agent stack that combines a Rust-based high-performance agent runtime (`agent-rs`), a Python orchestration layer (`start.py` & `scripts/`), a local LLM inference server (`llama-server` / `koboldcpp`), and a modern Web UI (`web-ui`).
 
-**Primary:**
-- Rust (2024 Edition) - Core agent logic, server, TUI, and security engine in `agent-rs/`.
-- TypeScript - Web UI and GSD 2.0 Pi SDK orchestration logic in `web-ui/` and GSD integration.
+## Component Stack
 
-**Secondary:**
-- Python 3.10+ - Setup, configuration, and model management scripts in `scripts/`.
-- C++ - High-performance LLM inference engine in `llama.cpp/`.
+### 1. Core Agent Engine (`agent-rs/`)
+- **Language & Edition:** Rust (Edition 2024)
+- **Binary Target:** `helix-agent` (`src/main.rs`)
+- **Library Crate:** `agent_rs` (`src/lib.rs`)
+- **Async Runtime:** Tokio 1.43 (`tokio` with `full` features), `futures-util`, `tokio-stream`
+- **TUI & Terminal UI:** `ratatui` 0.26, `crossterm` 0.27, `tui-input` 0.8, `tachyonfx` 0.11, `throbber-widgets-tui` 0.4, `rustyline` 15 (file history), `inquire` 0.9
+- **HTTP Server & API:** `axum` 0.7, `tower-http` 0.5 (CORS support), `bytes` 1.5
+- **HTTP Client & AI API:** `async-openai` 0.33, `reqwest` 0.12 (JSON & streaming)
+- **Database & Storage:** `rusqlite` 0.39 (bundled SQLite engine), `serde` 1.0, `serde_json` 1.0, `schemars` 1.2
+- **Security & Sandbox:** `bollard` 0.20 (Docker API client), `path-security` 0.2, `soft-canonicalize` 0.5, `shell-sanitize` 0.1, `shell-words` 1.0
+- **OS Diagnostics & System:** `sysinfo` 0.38, `evtx` 0.8 (Windows Event Log parser), `network-interface` 1.1, `service-manager` 0.11, `windows-service` 0.8, `num_cpus` 1.17
+- **Tokenizer & Grammar:** `tiktoken-rs` 0.9, `gbnf` 0.2 (BNF/GBNF grammar parser for local LLM sampling)
 
-## Runtime
+### 2. Local LLM Server & Management (`scripts/`, `start.py`)
+- **Language:** Python 3.10+
+- **Inference Binary:** `llama-server` (primary GGUF runner) / `koboldcpp` (fallback GGUF runner)
+- **Protocol:** OpenAI-compatible HTTP API (`http://127.0.0.1:8080/v1`)
+- **Dependencies:** `requests`, standard library (`subprocess`, `os`, `pathlib`, `json`)
+- **Model Storage:** GGUF quantized models located in `models/` directory
 
-**Environment:**
-- Rust Toolchain - For compiling `agent-rs/`.
-- Node.js (Vite/React) - For the `web-ui/`.
-- Python 3.x - For automation and fallback scripts.
+### 3. Web Interface (`web-ui/`)
+- **Framework:** React 19.2 (`react`, `react-dom`)
+- **Language:** TypeScript 5.9 (`typescript`, `typescript-eslint`)
+- **Build Tool & Dev Server:** Vite 8.0 (`vite`, `@vitejs/plugin-react`)
+- **Styling:** Tailwind CSS 3.4 (`tailwindcss`, `postcss`, `autoprefixer`)
+- **Icons & Rendering:** Lucide React 0.577 (`lucide-react`), React Markdown 10.1 (`react-markdown`, `rehype-raw`)
+- **Linting:** ESLint 9.39 (`eslint`, `@eslint/js`, `eslint-plugin-react-hooks`)
 
-**Package Manager:**
-- Cargo (Rust) - Lockfile: `agent-rs/Cargo.lock`
-- npm (Node.js) - Lockfile: `web-ui/package-lock.json`
-- pip (Python) - Requirements: `requirements.txt`
+## Build & Run Dependencies
 
-## Frameworks
-
-**Core:**
-- Axum - Rust web framework for the agent API in `agent-rs/src/server.rs`.
-- React + Vite - Frontend framework in `web-ui/`.
-- GSD 2.0 (Pi SDK) - Orchestration state machine for autonomous workflows.
-
-**Testing:**
-- Pytest - Python-based integration and system tests in `tests/`.
-- Cargo Test - Unit tests for Rust core in `agent-rs/src/`.
-
-**Build/Dev:**
-- CMake - For building `llama.cpp/`.
-- Tailwind CSS - For `web-ui/` styling.
-
-## Key Dependencies
-
-**Critical:**
-- `llama.cpp` - Local LLM inference provider.
-- `async-openai` - Rust client for OpenAI-compatible APIs (local server).
-- `tokio` - Async runtime for the Rust agent.
-- `ratatui` - Terminal UI framework for the Rust agent.
-
-**Infrastructure:**
-- `rusqlite` - SQLite storage for sessions and audit logs.
-- `sysinfo` - Hardware-aware profiling for model selection.
-- `gbnf` - Grammar-based sampling for structured tool calling.
-
-## Configuration
-
-**Environment:**
-- `.env` (Existence only) - Contains backend hints and model paths.
-- `scripts/config.py` - Python-side configuration for model paths and server flags.
-
-**Build:**
-- `agent-rs/Cargo.toml`
-- `web-ui/package.json`
-- `llama.cpp/CMakeLists.txt`
-
-## Platform Requirements
-
-**Development:**
-- Rustup, Node.js, Python 3, CMake, C++ Compiler.
-
-**Production:**
-- Consumer hardware with 8GB-24GB+ VRAM (NVIDIA/Apple Silicon/AMD) for Qwen 3.6 local execution.
-
----
-
-*Stack analysis: 2025-05-15*
+| Environment | Tool / Binary | Purpose |
+| --- | --- | --- |
+| Rust Compilation | `cargo` (Rustup 2024 edition support) | Compiles `agent-rs` binary and runs tests |
+| Python Environment | Python 3.10+ | Orchestrates server startup, model downloads, system checks |
+| Web UI Build | Node.js 18+, `npm` | Vite dev server and production web assets bundler |
+| Local AI Runner | `llama-server` or `koboldcpp` | Local CPU/GPU GGUF model execution |
+| Docker (Optional) | `docker` daemon | Containerized sandbox execution mode for high-risk tools |

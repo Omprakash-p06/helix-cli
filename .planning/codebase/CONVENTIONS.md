@@ -1,40 +1,56 @@
-# Helix OS Agent Global Process Standards & Conventions
+# Coding Conventions & Development Patterns
 
-## Snapshot
-Last refreshed: 2026-04-24
-Conventions updated to reflect the pivot to Autonomous OS Troubleshooting (Helix OS Agent).
+**Last Updated:** 2026-07-24
 
-## 1. Security-First Execution (Non-Negotiable)
-- **Mandatory Sandboxing:** All agent-initiated shell commands and scripts MUST run inside an isolated Docker or MicroVM sandbox.
-- **Policy Engine Gate:** Every command must pass through the canonicalization and allowlist policy engine. No direct `sh -c` or `cmd /C` execution on the host without a policy verdict.
-- **Human-in-the-Loop:** All state-modifying actions (writes, restarts, installs) REQUIRE explicit user confirmation. No "silent" system modifications allowed in default modes.
+## Coding Standards & Style Guidelines
 
-## 2. Orchestration Standards (GSD 2.0)
-- **Phase-Based Lifecycle:** Work follows the GSD 2.0 protocol: `Discover → Discuss → Plan → Execute → Verify → Close`.
-- **Context Management:** Reset LLM context between phases to prevent context rot. Major decision artifacts must be persisted as structured JSON/TOML, not conversation history.
-- **Verification Requirement:** Every task must have a deterministic verification step. Success is defined by state change validation, not model confirmation.
+### 1. Rust (`agent-rs/`)
+- **Formatting:** Formatted according to standard `rustfmt` rules.
+- **Naming Conventions:**
+  - Modules & Files: `snake_case` (e.g., `tool_runtime.rs`, `context_reset.rs`).
+  - Structs, Enums, Traits: `PascalCase` (e.g., `SecurityPolicy`, `AgentState`).
+  - Functions & Variables: `snake_case` (e.g., `execute_tool`, `validate_path`).
+  - Constants: `SCREAMING_SNAKE_CASE` (e.g., `MAX_TOKEN_LIMIT`).
+- **Error Handling:**
+  - Avoid `unwrap()` or `expect()` in production engine code; propagate errors with `?` or handle explicitly via `match`/`if let`.
+  - Use strongly typed error enums or `Result<T, Box<dyn std::error::Error + Send + Sync>>` for module boundaries.
+- **Async & Concurrency:**
+  - Use `tokio` channels (`mpsc`, `watch`, `broadcast`) for communication between background tasks (e.g. streaming LLM responses to TUI/Web).
+  - Always guard shared mutable state using `Arc<TokioMutex<T>>` or `Arc<RwLock<T>>`.
 
-## 3. Observability and Auditability
-- **Immutable Audit Logging:** Every policy decision, command execution, and tool outcome must be recorded in an append-only, tamper-evident audit log.
-- **Reasoning Transparency:** Internal deliberation (`<think>` blocks) must be preserved in the audit log and exposed in the UI for transparency.
-- **Confidence Scoring:** Agents must output a confidence score for diagnostic hypotheses. Low confidence (<80%) triggers mandatory user re-verification.
+### 2. Python (`scripts/` & `start.py`)
+- **Formatting:** PEP 8 compliant style.
+- **Naming Conventions:**
+  - Files & Functions: `snake_case` (e.g., `onboarding_profile.py`, `clean_orphaned_servers`).
+  - Classes: `PascalCase`.
+  - Global Constants: `SCREAMING_SNAKE_CASE` (e.g., `PROJECT_DIR`).
+- **Console Output:**
+  - Standardized status markers for user readability:
+    - `[i]` Info / Status updates
+    - `[✓]` Success verification
+    - `[!]` Warnings & Error conditions
+- **Process Management:**
+  - Always wrap process creation (`subprocess.Popen`) with explicit cleanup & signal handlers (`terminate()`, `kill()`) to prevent orphaned local LLM processes.
 
-## 4. Rust Code Conventions (Core Orchestrator)
-- **Async-First:** `tokio` for all I/O, streaming, and tool spawning.
-- **Type Safety:** Use `agent_core` (or `types.rs`) for all message and payload definitions.
-- **Tool Registry:** Tools must be registered with explicit permission metadata (e.g., `Read`, `Write`, `Elevated`).
-- **Zero-Warning Policy:** Code must be clippy-clean and free of compiler warnings.
+### 3. TypeScript & React (`web-ui/`)
+- **Formatting:** ESLint + Prettier standards.
+- **Naming Conventions:**
+  - React Component Files: `PascalCase.tsx` (e.g., `App.tsx`).
+  - Utility/CSS Files: `camelCase` or `kebab-case` (e.g., `main.tsx`, `index.css`).
+  - TypeScript Types/Interfaces: `PascalCase` (e.g., `Message`, `ApprovalRequest`).
+- **Component Design:**
+  - Pure functional React components utilizing hooks (`useState`, `useEffect`, `useCallback`).
+  - Utility-first styling via Tailwind CSS classes, avoiding inline styles.
 
-## 5. UI/UX Standards
-- **Streaming Reliability:** Raw byte-level streaming with immediate token rendering (no buffering delays).
-- **Interactive Feedback:** Real-time visual status for tool lifecycles (Running, Completed, Failed, Blocked).
-- **Rollback Visibility:** Users must be informed when a pre-repair snapshot is taken and offered a "Undo/Rollback" option.
+## Security & Safety Conventions
 
-## 7. Model Management & Loading
-- **Model Agnosticism:** The core system must support any local GGUF model. Avoid hardcoding model-specific logic unless necessary for grammar enforcement.
-- **Dynamic Selection:** On startup, scan the `models/` directory. If multiple models are present, prompt the user for selection.
-- **HuggingFace Integration:** Use the standard HF downloader pattern (repository + filename) for adding new models.
+1. **Path Normalization:**
+   - Always run paths through canonicalization (`soft-canonicalize` or `path-security`) before reading or modifying files.
+   - Guard against path traversal attempts (`..`, symlink escapes outside workspace root).
 
-## 8. GSD Orchestration UX
-- **Command Autofill:** When a phase advances or a task completes, the UI must suggest the next logical GSD command (e.g., `/gsd discuss`, `/gsd plan`, `/gsd execute`) in the input buffer.
-- **No Persistent Sessions:** Persistent "Last Chat" loading is disabled. Each session is standalone unless explicitly reloaded from an audit log (future feature).
+2. **Command Sanitation:**
+   - Shell command execution must pass through `shell-sanitize` and `shell-words` parsing.
+   - Command flags are validated against security policy levels (ReadOnly, GuidedRepair, Containerized).
+
+3. **Audit Logging:**
+   - Security decisions, tool execution attempts, and user approvals MUST be logged to audit trail via [agent-rs/src/audit.rs](file:///home/omprakash/helix-cli/agent-rs/src/audit.rs).
