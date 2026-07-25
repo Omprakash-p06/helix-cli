@@ -96,7 +96,8 @@ impl Indexer {
                 continue;
             }
             let symbols = parse_rust_file(&source, &path_str);
-            self.store_file_symbols(&path_str, &hash, &symbols)?;
+            let import_edges = extract_import_edges(&source, &path_str);
+            self.store_file_symbols(&path_str, &hash, &symbols, &import_edges)?;
             stats.indexed += 1;
             stats.symbols_found += symbols.len();
         }
@@ -175,11 +176,11 @@ impl Indexer {
     }
 
     /// Public wrapper for tests — same as `store_file_symbols` but pub.
-    pub fn store_file_symbols_pub(&mut self, file_path: &str, hash: &str, symbols: &[SymbolNode]) -> SqlResult<()> {
-        self.store_file_symbols(file_path, hash, symbols)
+    pub fn store_file_symbols_pub(&mut self, file_path: &str, hash: &str, symbols: &[SymbolNode], import_edges: &[(String, String)]) -> SqlResult<()> {
+        self.store_file_symbols(file_path, hash, symbols, import_edges)
     }
 
-    fn store_file_symbols(&mut self, file_path: &str, hash: &str, symbols: &[SymbolNode]) -> SqlResult<()> {
+    fn store_file_symbols(&mut self, file_path: &str, hash: &str, symbols: &[SymbolNode], import_edges: &[(String, String)]) -> SqlResult<()> {
         let tx = self.conn.transaction()?;
         // Remove stale data for this file
         tx.execute("DELETE FROM symbols WHERE file_path = ?1", params![file_path])?;
@@ -195,6 +196,14 @@ impl Indexer {
                     sym.file_path, sym.symbol_name, sym.symbol_kind,
                     sym.signature, sym.line_start, sym.line_end, sym.doc_comment
                 ],
+            )?;
+        }
+
+        // Insert import edges for dependency graph
+        for (from, to_path) in import_edges {
+            tx.execute(
+                "INSERT INTO import_edges (from_file, to_path) VALUES (?1, ?2)",
+                params![from, to_path],
             )?;
         }
 
@@ -303,6 +312,52 @@ pub fn parse_rust_file(source: &str, file_path: &str) -> Vec<SymbolNode> {
     symbols
 }
 
+/// Extract import edges from `use` declarations in a Rust source file.
+///
+/// Returns a list of `(from_file, to_path)` pairs where `from_file` is the
+/// absolute/normalized path of the current file and `to_path` is the text of
+/// the import path (e.g. "std::collections::HashMap", "crate::context::Indexer").
+///
+/// Uses a dedicated Tree-sitter query targeting `use_declaration` nodes to
+/// capture their argument (the scoped identifier path). This is separate from
+/// `parse_rust_file` — it focuses only on import relationships for the
+/// dependency graph.
+pub fn extract_import_edges(source: &str, file_path: &str) -> Vec<(String, String)> {
+    use tree_sitter::{Parser, Query, QueryCursor};
+
+    let mut parser = Parser::new();
+    let language = tree_sitter_rust::LANGUAGE.into();
+    if parser.set_language(&language).is_err() {
+        return vec![];
+    }
+
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return vec![],
+    };
+
+    let query = match Query::new(&language, "(use_declaration argument: (_) @import_path)") {
+        Ok(q) => q,
+        Err(_) => return vec![],
+    };
+
+    let mut cursor = QueryCursor::new();
+    let source_bytes = source.as_bytes();
+    let matches = cursor.matches(&query, tree.root_node(), source_bytes);
+
+    let mut edges = Vec::new();
+    for m in matches {
+        if let Some(capture) = m.captures.first() {
+            let start = capture.node.start_byte();
+            let end = capture.node.end_byte();
+            if let Some(path) = source.get(start..end) {
+                edges.push((file_path.to_string(), path.to_string()));
+            }
+        }
+    }
+    edges
+}
+
 /// Build a skeleton signature by eliding the body block if present.
 fn build_signature(source: &str, node: tree_sitter::Node, kind: &str) -> String {
     // Find child named "body" or "block" to elide
@@ -400,7 +455,7 @@ pub struct Greeter {
         let mut indexer = in_memory_indexer();
         let source = "pub fn my_target_fn(x: u32) -> u32 { x + 1 }";
         let symbols = parse_rust_file(source, "src/test.rs");
-        indexer.store_file_symbols("src/test.rs", "abc123", &symbols).unwrap();
+        indexer.store_file_symbols("src/test.rs", "abc123", &symbols, &[]).unwrap();
         let found = indexer.find_symbol("my_target_fn");
         assert!(!found.is_empty(), "Must find my_target_fn after storing");
         assert_eq!(found[0].symbol_kind, "fn");
@@ -412,7 +467,7 @@ pub struct Greeter {
         let hash = "fixed_hash_abc";
         let mut indexer = in_memory_indexer();
         let symbols = parse_rust_file(source, "src/stable.rs");
-        indexer.store_file_symbols("src/stable.rs", hash, &symbols).unwrap();
+        indexer.store_file_symbols("src/stable.rs", hash, &symbols, &[]).unwrap();
         // Second call with same hash should say "cached"
         assert!(indexer.is_cached("src/stable.rs", hash).unwrap(),
             "Same-hash file must be detected as cached");
@@ -426,7 +481,7 @@ pub struct Greeter {
         let mut indexer = in_memory_indexer();
         let source = "pub fn target_function(x: u32, y: u32) -> u32 { x + y }";
         let symbols = parse_rust_file(source, "src/benchmark_target.rs");
-        indexer.store_file_symbols("src/benchmark_target.rs", "bench_hash", &symbols).unwrap();
+        indexer.store_file_symbols("src/benchmark_target.rs", "bench_hash", &symbols, &[]).unwrap();
 
         let start = std::time::Instant::now();
         let found = indexer.find_symbol("target_function");
@@ -434,5 +489,48 @@ pub struct Greeter {
 
         assert!(!found.is_empty(), "Symbol must be found");
         assert!(elapsed.as_secs() < 3, "Symbol lookup must complete in <3s, got {:?}", elapsed);
+    }
+
+    #[test]
+    fn test_extract_import_edges_basic() {
+        let source = r#"
+use std::collections::HashMap;
+use crate::context::Indexer;
+use tokio::runtime::Runtime;
+"#;
+        let edges = extract_import_edges(source, "src/main.rs");
+        assert_eq!(edges.len(), 3, "Must extract all 3 use declarations");
+        assert!(edges.iter().any(|(f, p)| f == "src/main.rs" && p == "std::collections::HashMap"),
+            "Must find std::collections::HashMap import");
+        assert!(edges.iter().any(|(f, p)| f == "src/main.rs" && p == "crate::context::Indexer"),
+            "Must find crate::context::Indexer import");
+        assert!(edges.iter().any(|(f, p)| f == "src/main.rs" && p == "tokio::runtime::Runtime"),
+            "Must find tokio::runtime::Runtime import");
+    }
+
+    #[test]
+    fn test_extract_import_edges_no_imports() {
+        let source = "fn no_imports() -> i32 { 42 }";
+        let edges = extract_import_edges(source, "src/standalone.rs");
+        assert!(edges.is_empty(), "File with no use declarations must produce zero edges");
+    }
+
+    #[test]
+    fn test_import_edges_stored_and_queried() {
+        let source = r#"
+use std::sync::Arc;
+use crate::tool::ToolRuntime;
+"#;
+        let conn = Connection::open_in_memory().unwrap();
+        let mut indexer = Indexer::new(conn, ".").unwrap();
+        let symbols = parse_rust_file(source, "src/test_imports.rs");
+        let edges = extract_import_edges(source, "src/test_imports.rs");
+        indexer.store_file_symbols("src/test_imports.rs", "hash123", &symbols, &edges).unwrap();
+
+        let dot = indexer.export_dot_graph();
+        assert!(dot.contains("digraph helix_imports"), "DOT graph must have header");
+        assert!(dot.contains("Arc"), "DOT graph must contain imported symbol 'Arc'");
+        assert!(dot.contains("ToolRuntime"), "DOT graph must contain imported symbol 'ToolRuntime'");
+        assert!(dot.contains("->"), "DOT graph must contain at least one arrow (edge)");
     }
 }

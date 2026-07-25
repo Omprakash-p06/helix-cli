@@ -136,7 +136,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let mut indexer = Indexer::new(conn, ".").unwrap();
         let symbols = parse_rust_file(source, "src/test_file.rs");
-        indexer.store_file_symbols_pub("src/test_file.rs", "test_hash", &symbols).unwrap();
+        indexer.store_file_symbols_pub("src/test_file.rs", "test_hash", &symbols, &[]).unwrap();
         indexer
     }
 

@@ -117,6 +117,13 @@ None - no external service configuration required.
   - Plan 08-04 (Retrieval module) to query indexed symbols for context building
 - Runtime verification with `cargo build -p agent-rs` and `cargo test context::indexer -p agent-rs` should be performed when the Rust toolchain is available
 
+## Self-Check: PASSED
+
+All claims verified:
+- All created files exist on disk: `indexer.rs`, `skeleton.rs`, `memory.rs`, `retrieval.rs`, `SUMMARY.md`, `STATE.md`, `ROADMAP.md`
+- Both commits present: `5d5d458` (feat), `9418284` (docs)
+- All acceptance criteria content verified in `indexer.rs`: `pub struct Indexer`, `pub fn parse_rust_file`, `pub fn find_symbol`, `const SCHEMA`, `CREATE TABLE IF NOT EXISTS symbol_cache`, `#[cfg(test)]`
+
 ---
 
 *Phase: 08-repository-map-context-engineering-layer*
