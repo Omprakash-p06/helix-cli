@@ -13,6 +13,7 @@ use crate::agent_core::diagnostics::system::SystemProvider;
 use crate::agent_core::diagnostics::logs;
 use crate::agent_core::repair::tools::{ServiceRepairTool, PackageRepairTool, PermissionRepairTool};
 pub use crate::agent_core::tool_runtime::ToolResult;
+use rusqlite;
 
 // ==========================================
 // TOOL SCHEMAS & TYPES
@@ -61,6 +62,8 @@ pub struct GetSystemStatsInput {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct SearchCodebaseInput {
     pub query: String,
+    #[serde(default)]
+    pub depth: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -137,11 +140,6 @@ impl ToolRegistry {
             if (name == "run_terminal_command" || name == "service_repair" || name == "package_repair" || name == "permission_repair") && persona != "os_assistant" {
                 continue;
             }
-            if name == "search_codebase" {
-                // Keep it disabled for now as in current build_tools
-                continue;
-            }
-
             tools.push(json!({
                 "type": "function",
                 "function": {
@@ -257,10 +255,93 @@ impl Tool for GetSystemStatsTool {
 struct SearchCodebaseTool;
 impl Tool for SearchCodebaseTool {
     fn name(&self) -> String { "search_codebase".into() }
-    fn description(&self) -> String { "Performs keyword search across the codebase.".into() }
+    fn description(&self) -> String { "Search the codebase for Rust symbols (functions, structs, enums, traits) matching a query. Returns signatures and file locations. Use this when you need to find where a function is defined, who calls a function, or understand a data type.".into() }
     fn schema(&self) -> Value { schemars::schema_for!(SearchCodebaseInput).into() }
-    fn execute(&self, _args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
-        ToolResult { success: false, output: "Tool 'search_codebase' is currently disabled.".into() }
+    fn execute(&self, args: Value, _dc: &[String], _rc: bool, _ctx: &PolicyContext) -> ToolResult {
+        match serde_json::from_value::<SearchCodebaseInput>(args) {
+            Ok(input) => {
+                let workspace_root = get_allowed_dir();
+                let helix_dir = workspace_root.join(".helix");
+                let db_path = helix_dir.join("helix_context.db");
+
+                if !db_path.exists() {
+                    return ToolResult {
+                        success: false,
+                        output: "Context database not found. Run the agent once to index the workspace first.".into(),
+                    };
+                }
+
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => {
+                        let indexer = match crate::context::indexer::Indexer::new(conn, &workspace_root) {
+                            Ok(idx) => idx,
+                            Err(e) => {
+                                return ToolResult {
+                                    success: false,
+                                    output: format!("Failed to open indexer: {}", e),
+                                };
+                            }
+                        };
+
+                        // Search: exact match first, then substring
+                        let exact = indexer.find_symbol(&input.query);
+                        let substring = indexer.search_symbols(&input.query);
+
+                        // Merge results, dedup by file_path::symbol_name
+                        let mut seen = std::collections::HashSet::new();
+                        let mut results = Vec::new();
+
+                        for sym in exact.iter().chain(substring.iter()) {
+                            let key = format!("{}::{}", sym.file_path, sym.symbol_name);
+                            if seen.insert(key) {
+                                results.push(format!(
+                                    "{}: {} ({})",
+                                    sym.file_path, sym.symbol_name, sym.symbol_kind
+                                ));
+                            }
+                        }
+
+                        if results.is_empty() {
+                            ToolResult {
+                                success: true,
+                                output: format!("No symbols found matching '{}'.", input.query),
+                            }
+                        } else {
+                            let body = if input.depth.unwrap_or(0) >= 1 {
+                                // Include full signature
+                                let mut detailed = Vec::new();
+                                let mut seen_detailed = std::collections::HashSet::new();
+                                for sym in exact.iter().chain(substring.iter()) {
+                                    let key = format!("{}::{}", sym.file_path, sym.symbol_name);
+                                    if seen_detailed.insert(key) {
+                                        detailed.push(format!(
+                                            "// {}:{}-{}\n{}",
+                                            sym.file_path, sym.line_start, sym.line_end, sym.signature
+                                        ));
+                                    }
+                                }
+                                detailed.join("\n")
+                            } else {
+                                results.join("\n")
+                            };
+
+                            ToolResult {
+                                success: true,
+                                output: format!("=== CODEBASE SEARCH RESULTS ({}) ===\n{}\n================================", results.len(), body),
+                            }
+                        }
+                    }
+                    Err(e) => ToolResult {
+                        success: false,
+                        output: format!("Failed to open context database: {}", e),
+                    },
+                }
+            }
+            Err(e) => ToolResult {
+                success: false,
+                output: format!("Schema error: {}", e),
+            },
+        }
     }
 }
 
