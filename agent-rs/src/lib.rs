@@ -13,6 +13,7 @@ pub mod runtime_profile;
 pub mod watchdog;
 pub mod audit;
 pub mod agent_core;
+pub mod context;
 
 pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};
 
