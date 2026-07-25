@@ -174,6 +174,11 @@ impl Indexer {
         Ok(existing.as_deref() == Some(hash))
     }
 
+    /// Public wrapper for tests — same as `store_file_symbols` but pub.
+    pub fn store_file_symbols_pub(&mut self, file_path: &str, hash: &str, symbols: &[SymbolNode]) -> SqlResult<()> {
+        self.store_file_symbols(file_path, hash, symbols)
+    }
+
     fn store_file_symbols(&mut self, file_path: &str, hash: &str, symbols: &[SymbolNode]) -> SqlResult<()> {
         let tx = self.conn.transaction()?;
         // Remove stale data for this file
