@@ -61,29 +61,77 @@ pub struct ContextResult {
     pub token_count: usize,
 }
 
+// Re-export IndexStats for public access
+pub use crate::context::indexer::IndexStats;
+
+use crate::context::indexer::Indexer;
+use crate::context::memory::MemoryEngine;
+use crate::context::retrieval::{RetrievalEngine, format_results};
+use rusqlite::Connection;
+
 /// The central facade for all context operations.
 ///
 /// Lazily initialized — call `ContextEngine::new()` once at startup;
-/// the index is built/restored from SQLite cache automatically.
+/// then call `initialize()` to build/restore the index and enable memory.
 pub struct ContextEngine {
     pub db_path: std::path::PathBuf,
     pub workspace_root: std::path::PathBuf,
+    pub indexer: Option<Indexer>,
+    pub memory: Option<MemoryEngine>,
 }
 
 impl ContextEngine {
-    /// Open or create a context engine backed by `db_path`.
-    /// `workspace_root` is the directory to index (e.g., `./agent-rs/src`).
+    /// Open or create a context engine.
+    /// Call `initialize()` after `new()` to build the index.
     pub fn new(db_path: impl Into<std::path::PathBuf>, workspace_root: impl Into<std::path::PathBuf>) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             db_path: db_path.into(),
             workspace_root: workspace_root.into(),
+            indexer: None,
+            memory: None,
         })
     }
 
-    /// Build context for `query` within `token_budget` tokens.
-    /// Returns a formatted string ready for LLM injection.
+    /// Initialize: open SQLite connections, build/restore symbol index, enable memory layer.
+    /// Should be called once at agent startup.
+    pub fn initialize(&mut self) -> Result<IndexStats, Box<dyn std::error::Error>> {
+        // Create .helix/ directory if needed
+        if let Some(parent) = self.db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Indexer uses a separate "symbols" table namespace in the same DB
+        let conn_idx = Connection::open(&self.db_path)?;
+        let mut indexer = Indexer::new(conn_idx, &self.workspace_root)?;
+        let stats = indexer.index_workspace()?;
+        self.indexer = Some(indexer);
+
+        // Memory engine
+        let conn_mem = Connection::open(&self.db_path)?;
+        self.memory = Some(MemoryEngine::new(conn_mem)?);
+
+        Ok(stats)
+    }
+
+    /// Build a context string for `query` within the specified token budget.
     pub fn build_context(&self, query: &ContextQuery) -> Result<String, Box<dyn std::error::Error>> {
-        // Delegated to retrieval module (implemented in Plan 08-04)
-        Ok(format!("[Context placeholder for: {}]", query.query))
+        match &self.indexer {
+            Some(idx) => {
+                let engine = RetrievalEngine::new(idx);
+                let results = engine.search(query);
+                Ok(format_results(&results))
+            }
+            None => Ok("[Context engine not initialized. Call initialize() first.]".to_string()),
+        }
+    }
+
+    /// Build a repo skeleton (all symbols, Level 0) for session-start injection.
+    pub fn build_repo_skeleton(&self, token_budget: usize) -> String {
+        match &self.indexer {
+            Some(idx) => {
+                let engine = RetrievalEngine::new(idx);
+                engine.build_repo_skeleton(token_budget)
+            }
+            None => "[Index not loaded]".to_string(),
+        }
     }
 }
