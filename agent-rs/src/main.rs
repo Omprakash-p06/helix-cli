@@ -623,10 +623,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Initialize Context Engine (replaces legacy RAG)
-    let helix_dir = std::path::PathBuf::from(&app_config.allowed_dir).join(".helix");
+    let workspace_root = tools::get_allowed_dir();
+    let helix_dir = workspace_root.join(".helix");
     let context_db_path = helix_dir.join("helix_context.db");
     println!("\n[Context] Initializing symbol index... (incremental — only changed files re-indexed)");
-    let mut ctx_engine = agent_rs::context::ContextEngine::new(&context_db_path, &app_config.allowed_dir)?;
+    let mut ctx_engine = agent_rs::context::ContextEngine::new(&context_db_path, &workspace_root)?;
     let ctx_stats = ctx_engine.initialize().unwrap_or_else(|e| {
         eprintln!("  [!] Context engine initialization failed: {} — continuing without index", e);
         agent_rs::context::IndexStats::default()

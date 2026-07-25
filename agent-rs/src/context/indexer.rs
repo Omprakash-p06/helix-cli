@@ -328,6 +328,28 @@ fn sha256_hex(text: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Export the import graph as a Graphviz DOT string.
+/// The caller is responsible for writing to misc/architecture_YYYY-MM-DD.dot
+pub fn export_dot_graph(&self) -> String {
+    // Minimal DOT representation from import_edges table
+    let mut stmt = match self.conn.prepare("SELECT from_file, to_path FROM import_edges LIMIT 500") {
+        Ok(s) => s,
+        Err(_) => return "digraph G {}".to_string(),
+    };
+    let edges: Vec<(String, String)> = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }).map(|r| r.flatten().collect()).unwrap_or_default();
+
+    let mut dot = String::from("digraph helix_imports {\n  rankdir=LR;\n");
+    for (from, to) in &edges {
+        let from_short = from.split('/').last().unwrap_or(from);
+        let to_short = to.split("::").next().unwrap_or(to);
+        dot.push_str(&format!("  \"{}\" -> \"{}\";\n", from_short, to_short));
+    }
+    dot.push_str("}\n");
+    dot
+}
+
 /// Statistics from an indexing run.
 #[derive(Debug, Default)]
 pub struct IndexStats {
