@@ -622,11 +622,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agent_rs::agent_core::diagnostics::reasoning::DiagnosticEngine::new(audit_store.clone())
     ));
 
-    /*
-    println!("\n[RAG] Booting FastEmbed Semantic Knowledge Base... (this may take a moment)");
-    let rag_store = rag::RagStore::new(&app_config.allowed_dir)?;
-    println!("  [✓] Local RAG sequence complete. Vector Store loaded in-memory.");
-    */
+    // Initialize Context Engine (replaces legacy RAG)
+    let helix_dir = std::path::PathBuf::from(&app_config.allowed_dir).join(".helix");
+    let context_db_path = helix_dir.join("helix_context.db");
+    println!("\n[Context] Initializing symbol index... (incremental — only changed files re-indexed)");
+    let mut ctx_engine = agent_rs::context::ContextEngine::new(&context_db_path, &app_config.allowed_dir)?;
+    let ctx_stats = ctx_engine.initialize().unwrap_or_else(|e| {
+        eprintln!("  [!] Context engine initialization failed: {} — continuing without index", e);
+        agent_rs::context::IndexStats::default()
+    });
+    println!("  [✓] Index complete: {} files indexed, {} skipped, {} symbols found",
+        ctx_stats.indexed, ctx_stats.skipped, ctx_stats.symbols_found);
+
+    // Build session-start repo skeleton (5k token budget for pre-injection)
+    let repo_skeleton = ctx_engine.build_repo_skeleton(5_000);
+
+    // Export architecture visualization (ROADMAP Global Process Standard #3)
+    let dot_path = format!("misc/architecture_{}.dot",
+        chrono::Local::now().format("%Y-%m-%d"));
+    if let Some(idx) = &ctx_engine.indexer {
+        let dot = idx.export_dot_graph();
+        let _ = std::fs::write(&dot_path, &dot);
+        println!("  [✓] Architecture graph exported to {}", dot_path);
+    }
 
     let persona = std::env::var("AGENT_PERSONA").unwrap_or_else(|_| "os_assistant".to_string());
     let mut exec_mode = app_config.exec_mode.clone();
@@ -659,6 +677,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut system_prompt = system_prompt_for_mode(&exec_mode, &persona, &app_config);
+    system_prompt.push_str(&format!("\n\n{}", repo_skeleton));
 
     let ui_mode = std::env::var("HELIX_UI_MODE").unwrap_or_else(|_| "terminal".to_string());
 
