@@ -37,6 +37,7 @@ A defense-in-depth AI orchestrator combining a high-performance Rust core (`agen
 - ✓ Phase 02: Cross-platform OS diagnostics and DRL engine.
 - ✓ Phase 03: HITL safety gates and transactional repairs.
 - ✓ Phase 04: GSD 2.0 orchestration and recovery operators.
+- ✓ Phase 08: Repository map and context engineering layer (Tree-sitter symbol indexer, SQLite cache, JIT retrieval pipeline, durable agent memory, dependency graph).
 
 ---
 
@@ -68,4 +69,4 @@ A defense-in-depth AI orchestrator combining a high-performance Rust core (`agen
 | Local-First Privacy | OS troubleshooting involves sensitive logs and system state; cloud APIs are a privacy risk. | Core Value |
 
 ---
-*Last updated: 2026-04-26 — Generalized to multi-model vision and removed persistent sessions.*
+*Last updated: 2026-07-25 — Phase 08 (Repository Map & Context Engineering Layer) complete.*
