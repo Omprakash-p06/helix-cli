@@ -63,7 +63,14 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 
 ## [ ] Phase 08: Repository Map & Context Engineering Layer
 **Goal:** Build a hierarchical context system — Tree-sitter/LSP symbol extraction, dependency graph, just-in-time retrieval, and a durable agent memory layer — so the agent can reason over large codebases without concatenating raw files into the prompt.
-**Success Metrics:** Agent can locate any symbol, all callers, and direct dependencies within 3 seconds; context budget stays under 40k active tokens per task; durable state (goals, constraints, decisions, failed attempts, edit ledger) survives compaction cycles without information loss.
+*   **Status:** GAP CLOSURE (1 plan)
+*   **Plans:** 5 plans (08-01 through 08-05)
+    - [x] 08-01 — Context Module Foundation: Types, Token Budget & Skeleton Extraction
+    - [x] 08-02 — Tree-sitter Symbol Indexer & SQLite Cache
+    - [x] 08-03 — Durable Agent Memory Layer (SQLite FTS5)
+    - [x] 08-04 — JIT Retrieval Pipeline, Context Engine Integration & search_codebase Tool
+    - [ ] 08-05 — Populate Import Edges Table & Dependency Graph (gap closure)
+*   **Success Metrics:** Agent can locate any symbol, all callers, and direct dependencies within 3 seconds; context budget stays under 40k active tokens per task; durable state (goals, constraints, decisions, failed attempts, edit ledger) survives compaction cycles without information loss.
 
 ## [ ] Phase 09: Web Research Agent — Deep Research Pipeline
 **Goal:** Add a bounded web research subsystem (Planner → Source Workers → Evidence Store → Synthesizer) that gathers cited external intelligence before coding changes, with strict prompt-injection isolation.
