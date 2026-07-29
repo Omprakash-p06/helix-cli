@@ -24,9 +24,7 @@ pub struct AppConfig {
     pub backend_capabilities: BackendCapabilities,
 }
 
-fn default_sandbox_interpreters() -> bool {
-    true
-}
+fn default_sandbox_interpreters() -> bool { true }
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize, Default)]
 pub struct BackendCapabilities {

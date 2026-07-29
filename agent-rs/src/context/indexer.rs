@@ -218,10 +218,33 @@ impl Indexer {
         )?;
         tx.commit()
     }
+
+    /// Export the import graph as a Graphviz DOT string.
+    /// The caller is responsible for writing to misc/architecture_YYYY-MM-DD.dot
+    pub fn export_dot_graph(&self) -> String {
+        // Minimal DOT representation from import_edges table
+        let mut stmt = match self.conn.prepare("SELECT from_file, to_path FROM import_edges LIMIT 500") {
+            Ok(s) => s,
+            Err(_) => return "digraph G {}".to_string(),
+        };
+        let edges: Vec<(String, String)> = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }).map(|r| r.flatten().collect()).unwrap_or_default();
+
+        let mut dot = String::from("digraph helix_imports {\n  rankdir=LR;\n");
+        for (from, to) in &edges {
+            let from_short = from.split('/').last().unwrap_or(from);
+            let to_short = to.split("::").last().unwrap_or(to);
+            dot.push_str(&format!("  \"{}\" -> \"{}\";\n", from_short, to_short));
+        }
+        dot.push_str("}\n");
+        dot
+    }
 }
 
 /// Parse a Rust source file and extract all top-level symbols using Tree-sitter.
 pub fn parse_rust_file(source: &str, file_path: &str) -> Vec<SymbolNode> {
+    use streaming_iterator::StreamingIterator;
     use tree_sitter::{Parser, Query, QueryCursor};
 
     let mut parser = Parser::new();
@@ -252,22 +275,21 @@ pub fn parse_rust_file(source: &str, file_path: &str) -> Vec<SymbolNode> {
     };
 
     let mut cursor = QueryCursor::new();
-    let source_bytes = source.as_bytes();
-    let matches = cursor.matches(&query, tree.root_node(), source_bytes);
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
     let mut symbols = Vec::new();
 
-    for m in matches {
+    while let Some(m) = matches.next() {
         let outer_node = m.captures.iter().find(|c| {
-            let cn = query.capture_names()[c.index as usize].as_str();
+            let cn = query.capture_names()[c.index as usize];
             matches!(cn, "fn" | "struct" | "enum" | "trait" | "impl" | "mod" | "use")
         });
         let name_capture = m.captures.iter().find(|c| {
-            query.capture_names()[c.index as usize].as_str() == "name"
+            query.capture_names()[c.index as usize] == "name"
         });
 
         let outer = match outer_node { Some(c) => c, None => continue };
-        let outer_kind = query.capture_names()[outer.index as usize].as_str();
+        let outer_kind = query.capture_names()[outer.index as usize];
 
         let symbol_kind = match outer_kind {
             "fn" => "fn",
@@ -323,6 +345,7 @@ pub fn parse_rust_file(source: &str, file_path: &str) -> Vec<SymbolNode> {
 /// `parse_rust_file` — it focuses only on import relationships for the
 /// dependency graph.
 pub fn extract_import_edges(source: &str, file_path: &str) -> Vec<(String, String)> {
+    use streaming_iterator::StreamingIterator;
     use tree_sitter::{Parser, Query, QueryCursor};
 
     let mut parser = Parser::new();
@@ -336,22 +359,22 @@ pub fn extract_import_edges(source: &str, file_path: &str) -> Vec<(String, Strin
         None => return vec![],
     };
 
-    let query = match Query::new(&language, "(use_declaration argument: (_) @import_path)") {
+    let query = match Query::new(&language, "(use_declaration) @import_path") {
         Ok(q) => q,
         Err(_) => return vec![],
     };
 
     let mut cursor = QueryCursor::new();
-    let source_bytes = source.as_bytes();
-    let matches = cursor.matches(&query, tree.root_node(), source_bytes);
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
     let mut edges = Vec::new();
-    for m in matches {
+    while let Some(m) = matches.next() {
         if let Some(capture) = m.captures.first() {
             let start = capture.node.start_byte();
             let end = capture.node.end_byte();
             if let Some(path) = source.get(start..end) {
-                edges.push((file_path.to_string(), path.to_string()));
+                let clean_path = path.trim_start_matches("use ").trim_end_matches(';').trim();
+                edges.push((file_path.to_string(), clean_path.to_string()));
             }
         }
     }
@@ -381,28 +404,6 @@ fn sha256_hex(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-/// Export the import graph as a Graphviz DOT string.
-/// The caller is responsible for writing to misc/architecture_YYYY-MM-DD.dot
-pub fn export_dot_graph(&self) -> String {
-    // Minimal DOT representation from import_edges table
-    let mut stmt = match self.conn.prepare("SELECT from_file, to_path FROM import_edges LIMIT 500") {
-        Ok(s) => s,
-        Err(_) => return "digraph G {}".to_string(),
-    };
-    let edges: Vec<(String, String)> = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }).map(|r| r.flatten().collect()).unwrap_or_default();
-
-    let mut dot = String::from("digraph helix_imports {\n  rankdir=LR;\n");
-    for (from, to) in &edges {
-        let from_short = from.split('/').last().unwrap_or(from);
-        let to_short = to.split("::").next().unwrap_or(to);
-        dot.push_str(&format!("  \"{}\" -> \"{}\";\n", from_short, to_short));
-    }
-    dot.push_str("}\n");
-    dot
 }
 
 /// Statistics from an indexing run.

@@ -78,6 +78,10 @@ pub struct ContextEngine {
     pub workspace_root: std::path::PathBuf,
     pub indexer: Option<Indexer>,
     pub memory: Option<MemoryEngine>,
+    pub web_research: Option<(
+        crate::agent_core::web_research::WebResearchPipeline,
+        std::sync::Arc<tokio::sync::Mutex<crate::agent_core::web_research::EvidenceStore>>,
+    )>,
 }
 
 impl ContextEngine {
@@ -89,6 +93,7 @@ impl ContextEngine {
             workspace_root: workspace_root.into(),
             indexer: None,
             memory: None,
+            web_research: None,
         })
     }
 
@@ -109,7 +114,37 @@ impl ContextEngine {
         let conn_mem = Connection::open(&self.db_path)?;
         self.memory = Some(MemoryEngine::new(conn_mem)?);
 
+        // Web Research engine
+        let conn_web = Connection::open(&self.db_path)?;
+        if let Ok(evidence_store) = crate::agent_core::web_research::EvidenceStore::new(conn_web) {
+            let pipeline = crate::agent_core::web_research::WebResearchPipeline::new();
+            self.web_research = Some((pipeline, std::sync::Arc::new(tokio::sync::Mutex::new(evidence_store))));
+        }
+
         Ok(stats)
+    }
+
+    /// Enriches the agent context with live web research if the query is classified as requiring it.
+    pub async fn enrich_with_research(
+        &self,
+        query: &str,
+        session_id: &str,
+    ) -> Option<crate::agent_core::web_research::synthesizer::ResearchBrief> {
+        let (pipeline, store) = self.web_research.as_ref()?;
+        let run_res = pipeline.run(query, store.clone()).await;
+        if let Err(e) = run_res {
+            eprintln!("[ContextEngine] WebResearchPipeline error: {}", e);
+            return None;
+        }
+
+        let synthesizer = crate::agent_core::web_research::EvidenceSynthesizer::new();
+        let store_guard = store.lock().await;
+        let brief = synthesizer.brief_from_store(&store_guard, session_id);
+        if brief.facts.is_empty() {
+            None
+        } else {
+            Some(brief)
+        }
     }
 
     /// Build a context string for `query` within the specified token budget.

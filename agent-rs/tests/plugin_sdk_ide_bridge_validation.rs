@@ -104,6 +104,10 @@ mod agent_core {
     }
 }
 
+mod context {
+    pub use agent_rs::context::*;
+}
+
 mod tools {
     include!("../src/tools.rs");
 }
@@ -205,13 +209,13 @@ mod server {
 
             let os_assistant_payload = registry.build_tools_payload("os_assistant", true);
             let os_tools = os_assistant_payload.as_array().expect("payload array");
-            assert_eq!(os_tools.len(), 13);
+            assert_eq!(os_tools.len(), 14);
             assert!(os_tools.iter().any(|tool| tool["function"]["name"] == "run_terminal_command"));
-            assert!(!os_tools.iter().any(|tool| tool["function"]["name"] == "search_codebase"));
+            assert!(os_tools.iter().any(|tool| tool["function"]["name"] == "search_codebase"));
 
             let coder_payload = registry.build_tools_payload("coder", true);
             let coder_tools = coder_payload.as_array().expect("payload array");
-            assert_eq!(coder_tools.len(), 9);
+            assert_eq!(coder_tools.len(), 10);
             assert!(!coder_tools.iter().any(|tool| tool["function"]["name"] == "run_terminal_command"));
             assert!(coder_tools.iter().any(|tool| tool["function"]["name"] == "write_file"));
         }
