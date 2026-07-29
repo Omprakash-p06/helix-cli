@@ -46,7 +46,7 @@ pub fn format_skeleton_entry(file_path: &str, line_start: u32, line_end: u32, si
 /// Format a full repo skeleton header for LLM injection.
 ///
 /// Produces a block like:
-/// ```
+/// ```text
 /// === CODEBASE SKELETON (N symbols) ===
 /// [entries...]
 /// =====================================
