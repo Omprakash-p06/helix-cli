@@ -61,7 +61,7 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
 *   **Plans:** 2 plans (07-01, 07-02)
 *   **Success Metrics:** Zero bypass paths exist from any tool to unsandboxed interpreter/build execution; ReadOnly is an absolute incapability (no write/exec bypass); all security guardrail tests pass including adversarial path-traversal and command-injection scenarios; new `capabilities` module replaces persona-name-based policy checks. Provenance-based content filtering prevents Untrusted content from reaching system prompts. Watchdog verifies process ownership before terminating (P1-4).
 
-## [ ] Phase 08: Repository Map & Context Engineering Layer
+## [x] Phase 08: Repository Map & Context Engineering Layer
 **Goal:** Build a hierarchical context system — Tree-sitter/LSP symbol extraction, dependency graph, just-in-time retrieval, and a durable agent memory layer — so the agent can reason over large codebases without concatenating raw files into the prompt.
 *   **Status:** COMPLETED (5 plans)
 *   **Plans:** 5 plans (08-01 through 08-05)
@@ -72,10 +72,16 @@ This roadmap defines the pivot of Helix Agent into a local-first, autonomous AI 
     - [x] 08-05 — Populate Import Edges Table & Dependency Graph (gap closure)
 *   **Success Metrics:** Agent can locate any symbol, all callers, and direct dependencies within 3 seconds; context budget stays under 40k active tokens per task; durable state (goals, constraints, decisions, failed attempts, edit ledger) survives compaction cycles without information loss.
 
-## [ ] Phase 09: Web Research Agent — Deep Research Pipeline
+## [x] Phase 09: Web Research Agent — Deep Research Pipeline
 **Goal:** Add a bounded web research subsystem (Planner → Source Workers → Evidence Store → Synthesizer) that gathers cited external intelligence before coding changes, with strict prompt-injection isolation.
-**Success Metrics:** Research completes with provenance-stamped citations; fetched content is never treated as executable instructions; freshness classifier correctly routes stale dependency questions to live research; research brief is ≤2k tokens delivered to the coding agent.
+*   **Status:** COMPLETED (4 plans)
+*   **Plans:** 4 plans (09-01 through 09-04)
+    - [x] 09-01 — Web Research Module Foundation — Types, Schema & Freshness Classifier
+    - [x] 09-02 — HTML Sanitization & Content Provenance Tagging
+    - [x] 09-03 — Research Pipeline Orchestrator — Planner, Worker Pool & Fetch Loop
+    - [x] 09-04 — Evidence Synthesizer, Context Integration & Adversarial Tests
+*   **Success Metrics:** Research completes with provenance-stamped citations; fetched content is never treated as executable instructions; freshness classifier correctly routes stale dependency questions to live research; research brief is ≤2k tokens delivered to the coding agent.
 
 ## [ ] Phase 10: Gemma 4 E4B Integration & Evaluation Suite
 **Goal:** Switch the default test model to Gemma 4 E4B-it (128K context, native function calling), wire it into the updated context-engineering stack, and run the minimum evaluation suite to benchmark repo comprehension, tool-call correctness, long-session retention, research factuality, prompt-injection resistance, policy-escape resistance, and rollback correctness.
-**Success Metrics:** All 8 evaluation scenarios pass; long-session retention benchmark shows ≥90% constraint recall after 3 compaction cycles; prompt-injection tests show 0% instruction-following from untrusted content.
+*   **Success Metrics:** All 8 evaluation scenarios pass; long-session retention benchmark shows ≥90% constraint recall after 3 compaction cycles; prompt-injection tests show 0% instruction-following from untrusted content.
