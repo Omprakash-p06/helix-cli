@@ -1,35 +1,427 @@
-# Technical Debt & Known Concerns
+# Codebase Concerns
 
-**Last Updated:** 2026-07-30
+**Analysis Date:** 2026-07-30
 
-## Known Technical Debt & Areas of Concern
+## Technical Debt
 
-### 1. Process Lifecycle & Port Binding Conflicts
-- **Issue:** The local LLM inference engine (`llama-server` / `koboldcpp`) defaults to port `8080`.
-- **Impact:** If another local service occupies port 8080 or if a previous instance did not cleanly unbind the HTTP socket, server startup fails.
-- **Mitigation / Location:** `start.py` auto-detects port availability before boot — if the default port is occupied, it increments until a free port is found. The resolved port is passed as `HELIX_SERVER_PORT` env var to both the server and the agent. The port can also be explicitly set via `HELIX_SERVER_PORT` env var or `SERVER_PORT` in [scripts/config.py](file:///home/omprakash/helix-cli/scripts/config.py). See [start.py](file:///home/omprakash/helix-cli/start.py) for the `find_free_port()` implementation and the `clean_orphaned_servers()` routine.
+### Monolithic `main.rs` (2198 lines)
 
-### 2. Local LLM Context Window & VRAM Overhead
-- **Issue:** Large language model GGUF quantizations (e.g. 7B/14B parameters) with extended context windows (16k+ tokens) require high VRAM or CPU RAM offloading.
-- **Impact:** On systems with constrained GPU VRAM (< 8GB), high context prompts during deep troubleshooting sessions can slow inference speed or trigger out-of-memory errors.
-- **Mitigation / Location:** Evaluated by [scripts/system_check.py](file:///home/omprakash/helix-cli/scripts/system_check.py) and managed by context window reset logic in [agent-rs/src/agent_core/orchestration/context_reset.rs](file:///home/omprakash/helix-cli/agent-rs/src/agent_core/orchestration/context_reset.rs). The server launcher ([scripts/start_server.py](file:///home/omprakash/helix-cli/scripts/start_server.py)) detects OOM on first attempt and automatically falls back to CPU-only with reduced GPU layers.
+**Issue:** A single file `agent-rs/src/main.rs` contains the entire orchestrator event loop across both Terminal and TUI modes. The file is 2198 lines with two large almost-identical LLM loop implementations (~1000 lines each) — one for terminal mode, one for TUI mode.
 
-### 3. Dual UI Interface Synchronization (TUI vs Web UI)
-- **Issue:** Helix CLI supports both a terminal TUI (Ratatui + Crossterm) and a web app dashboard (React + Axum SSE server).
-- **Impact:** Feature additions (such as new tool approval dialogs, streaming message controls, or status indicators) must be implemented twice — once for the terminal event loop in [agent-rs/src/tui/events.rs](file:///home/omprakash/helix-cli/agent-rs/src/tui/events.rs) and once for the REST/SSE API in [agent-rs/src/server.rs](file:///home/omprakash/helix-cli/agent-rs/src/server.rs) / React UI.
-- **Status:** Accepted architectural trade-off. A shared event format could reduce duplication but would require significant refactoring.
+**Files:** `agent-rs/src/main.rs`
 
-### 4. Cross-Platform Diagnostic Abstraction Differences
-- **Issue:** OS-level troubleshooting features require different underlying APIs depending on the platform (Linux systemd/journalctl vs. Windows Event Logs/Win32 services).
-- **Impact:** Platform-specific code branches exist in [agent-rs/src/agent_core/diagnostics/system.rs](file:///home/omprakash/helix-cli/agent-rs/src/agent_core/diagnostics/system.rs) and [agent-rs/src/agent_core/diagnostics/logs.rs](file:///home/omprakash/helix-cli/agent-rs/src/agent_core/diagnostics/logs.rs). Operating system edge cases (e.g. permission limits when reading system logs without root/admin privileges) must be handled gracefully. macOS is not supported for log retrieval.
+**Impact:** High maintenance burden. Any change to the LLM interaction pattern must be made in two places. Risk of drift between the two implementations.
 
-### 5. Docker Sandbox Daemon Availability
-- **Issue:** High-security sandbox mode relies on Docker daemon availability via `bollard` client.
-- **Impact:** If Docker daemon is unavailable, stopped, or the user lacks socket permission (`/var/run/docker.sock`), the sandboxed `run_terminal_command` tool fails with a clear error. There is **no automatic fallback to host execution** — `DockerSandbox::new()` returns an error which propagates as a tool failure.
-- **Location:** [agent-rs/src/security/sandbox.rs](file:///home/omprakash/helix-cli/agent-rs/src/security/sandbox.rs) (DockerSandbox construction), [agent-rs/src/agent_core/tool_runtime.rs](file:///home/omprakash/helix-cli/agent-rs/src/agent_core/tool_runtime.rs) (error propagation at line 297-304).
-- **Note:** Implementing a host-execution fallback would be a security-sensitive change. Currently interpreter tools are sandboxed when `sandbox_interpreters` is enabled in config; if Docker is unavailable, those tools fail explicitly rather than silently degrading security.
+**Fix approach:** Extract the shared LLM loop logic into a dedicated module. The loop variants (TUI vs terminal) should be thin wrappers around a shared `LLMInteractionLoop` struct.
 
-## Fragile Areas & Key Security Considerations
+### Duplicated LLM Loop Logic
 
-- **Path Traversal & Soft Canonicalization:** File operations depend on `soft-canonicalize` and `path-security` in [agent-rs/src/security/policy.rs](file:///home/omprakash/helix-cli/agent-rs/src/security/policy.rs) to ensure tools cannot write outside approved workspace boundaries.
-- **Tool Repetitive Calling / Loop Prevention:** LLM tool calling loops are guarded by `watchdog.rs` and tool execution scoring limits to prevent runaway shell commands when local models get stuck in repetition loops.
+**Issue:** The `run_llm_loop_tui` function (lines 1658-2197) and the inline loop within `main()` (lines 1202-1642, and 1159-1643) have nearly identical structure:
+- Context compaction at 70% threshold
+- Request body construction with streaming
+- SSE stream parsing
+- Tool call extraction and execution via `join_all`
+- Critic injection for failed/successful tools
+
+**Files:** `agent-rs/src/main.rs` (lines ~1202-1642 and ~1658-2197)
+
+**Impact:** 1000+ lines of duplicated logic. Both loops evolved independently — subtle differences exist in error handling and TUI event forwarding.
+
+**Fix approach:** Extract a shared `LLMLoop` struct with configurable event sinks (TUI vs terminal output).
+
+### Excessive `unwrap()` Calls
+
+**Issue:** The codebase has 100+ `unwrap()` calls (and approximately 20 `expect()` calls) in production source code (excluding test files). Notable examples:
+
+**Files:** All modules under `agent-rs/src/`
+
+**Examples of risky unwraps:**
+- `agent-rs/src/main.rs:1166` — `rl.as_mut().unwrap()` — will panic if editor not initialized
+- `agent-rs/src/main.rs:1275,1284,1752,1761` — `request_body.as_object_mut().unwrap()` — assumes request_body is an object
+- `agent-rs/src/server.rs:107,108` — `unwrap()` on TcpListener::bind and axum::serve — crash on port conflicts
+- `agent-rs/src/tokens.rs:7` — `cl100k_base().unwrap()` — crashes if tokenizer not available
+- `agent-rs/src/audit.rs:67,117,177,211` — `self.conn.lock().unwrap()` — panics if mutex poisoned
+- `agent-rs/src/stream.rs:160` — `panic!("Expected Data event")` — hard panic in parser
+
+**Impact:** Any unexpected condition causes the entire agent to crash with no graceful degradation.
+
+**Fix approach:** Replace with proper error propagation (`?` operator or `unwrap_or_else` with graceful fallback). Reserve `unwrap()`/`expect()` for tests and truly unrecoverable init failures with clear messages.
+
+### Python/Rust Config Bridge — Subprocess Spawn
+
+**Issue:** `AppConfig::load_from_python()` in `agent-rs/src/config.rs` spawns a Python subprocess to evaluate `scripts/config.py` and parse JSON from stdout. This means every Rust agent startup depends on Python being installed and on the correct path.
+
+**Files:** `agent-rs/src/config.rs` (lines 41-134)
+
+**Impact:** Fragile bootstrap — if Python is missing, misconfigured, or if `scripts/config.py` throws an error, the entire agent fails to start. The inline Python script (lines 42-101) is embedded as a raw string in Rust code, making it hard to debug or maintain.
+
+**Fix approach:** Move to a config file format (JSON/YAML/TOML) generated by Python during setup, read directly by Rust at runtime without spawning a subprocess.
+
+### Hardcoded Port Values
+
+**Issue:** `agent-rs/src/server.rs` hardcodes port 3000 (line 99), while `scripts/config.py` defaults to 8080 (line 354) and `start.py` resolves ports dynamically. There is also no port passed through to the web server from the config.
+
+**Files:** `agent-rs/src/server.rs:99`, `scripts/config.py:354`, `start.py:158`
+
+**Impact:** Web server always listens on 3000 regardless of what the config says, causing silent misconfiguration if the user expects a different port.
+
+**Fix approach:** Pass the port through `AppConfig` or environment to the web server.
+
+### `os.system()` in Python Launcher
+
+**Issue:** `start.py:342` uses `os.system()` to clear the terminal screen — a shell-invocable function.
+
+**Files:** `start.py:342` (`os.system('cls' if os.name == 'nt' else 'clear')`)
+
+**Impact:** While low-risk for screen clearing, `os.system()` is a general code smell — it invokes a shell subprocess which can be exploited if the environment variables or PATH are tampered with.
+
+**Fix approach:** Use `print("\033c", end="")` for ANSI terminals or `subprocess.run` with explicit paths.
+
+### TODO Left in Production Code
+
+**Issue:** A `TODO` comment remains in production code with no tracking issue.
+
+**Files:** `agent-rs/src/context/indexer.rs:330` — `doc_comment: None, // TODO: extract doc comments in a follow-up`
+
+**Impact:** Doc comment extraction is a known feature gap with no follow-up plan.
+
+## Fragile Areas
+
+### Giant Monolithic Async Function
+
+**Issue:** `main()` is a single enormous `async fn` spanning 1651+ lines with deeply nested loops (loop inside loop inside async block). Error handling is inconsistent — some branches `break`, some `return`, some silently ignore errors.
+
+**Files:** `agent-rs/src/main.rs` (entire file)
+
+**Impact:** Extremely hard to reason about, test, or refactor. Single `#[tokio::main]` entry point means no modular testing of individual flows.
+
+**Fix approach:** Split into focused modules: `LLMInteractionLoop`, `ToolExecutionPipeline`, `ContextManager`, `StreamParser`.
+
+### `AuditStore` Mutex Bottleneck
+
+**Issue:** `AuditStore` wraps a `rusqlite::Connection` in `Mutex<Connection>`, meaning every audit event acquisition and query must acquire a synchronous mutex lock inside an async context. This can block the async runtime if the DB write is slow.
+
+**Files:** `agent-rs/src/audit.rs:28` — `conn: Mutex<Connection>`
+
+**Impact:** Potential async runtime blockage. `Mutex::lock().unwrap()` at lines 67, 117, 177, 211 will panic if the mutex is poisoned, causing cascading failures.
+
+**Fix approach:** Use `tokio::sync::Mutex` for async compatibility, or switch to a dedicated DB writer task with a channel.
+
+### Context Compaction — LLM Call Inside Hot Path
+
+**Issue:** When context exceeds 70% threshold, the code makes a synchronous LLM call to summarize the conversation (lines 1246-1261, 1723-1738 in `main.rs`). This adds 5-30 seconds of latency to the user-facing interaction.
+
+**Files:** `agent-rs/src/main.rs:1223-1262` and `main.rs:1700-1738`
+
+**Impact:** Unpredictable latency spikes during long conversations. The compaction itself consumes tokens (cost). No fallback if the compaction LLM call fails — the conversation just continues without compaction.
+
+**Fix approach:** Make compaction async with a timeout and graceful degradation (proceed without compaction if it times out).
+
+### Windows VSS Snapshot Restore Not Implemented
+
+**Issue:** `SnapshotsManager::restore_snapshot()` returns `Err("VSS restore not yet implemented in MVP")` on Windows. The create path uses `vssadmin` which requires Administrator privileges.
+
+**Files:** `agent-rs/src/agent_core/repair/snapshots.rs:86-92`
+
+**Impact:** Repair workflows on Windows cannot restore files. The entire self-repair system is effectively Linux-only.
+
+**Fix approach:** Implement a non-VSS-based restore (e.g., copy-based backup/restore) as a cross-platform fallback.
+
+### Shell Metacharacter Block Is Extremely Restrictive
+
+**Issue:** `block_metacharacters()` in `policy.rs:471-479` blocks ALL shell metacharacters: `|`, `;`, `&`, `>`, `<`, `` ` ``, `$`, `(`, `)`, `{`, `}`, `[`, `]`. This means commands like `ls -la | head`, `echo $HOME`, `grep pattern file > output.txt` are all blocked.
+
+**Files:** `agent-rs/src/security/policy.rs:156-158`
+
+**Impact:** Severely limits the agent's ability to compose commands. The agent cannot pipe, redirect, use environment variables, or use subshells. This is partially mitigated by the `ToolRuntime` running commands through the Docker sandbox, but the restriction applies to both paths.
+
+**Fix approach:** Differentiate between metacharacters in command arguments vs. command chaining. Allow common safe patterns (e.g., `>` for output redirection) while blocking dangerous ones (`| sh`, `` ` ``).
+
+## Security Considerations
+
+### TOCTOU Race Condition in Path Sandbox
+
+**Issue:** `enforce_sandbox()` in `tools.rs:420-458` uses `std::fs::canonicalize()` to resolve the target path and then checks if it's within the allowed directory. Between the `canonicalize()` call and the actual file operation, a symlink could be swapped (time-of-check-time-of-use vulnerability).
+
+**Files:** `agent-rs/src/tools.rs:420-458`
+
+**Impact:** A race condition that could allow bypassing the sandbox if the attacker can modify symlinks between the check and the operation. In practice, low risk for a local agent tool, but architecturally unsound.
+
+**Current mitigation:** None.
+
+**Recommendations:** Use `std::fs::OpenOptions` with `.follow_symlinks(false)` on platforms that support it, or open the file first and then check the opened file descriptor's canonical path.
+
+### Sensitive Path Detection Uses `contains()`
+
+**Issue:** `is_sensitive_diagnostic_path()` checks for `/etc/shadow`, `/root/`, `/.ssh/` using `path_str.contains(needle)`. This means a file named `etc/shadow_backup.txt` would also match, and conversely, bypassing via `/./etc/shadow` might work.
+
+**Files:** `agent-rs/src/tools.rs:460-476`
+
+**Impact:** False positives and potential bypasses. The path should be canonicalized and compared exactly or via `starts_with`.
+
+**Current mitigation:** The function is only the last defense layer — path must first pass the allowlist.
+
+**Recommendations:** Compare against canonicalized paths using exact match or `starts_with` after canonicalization.
+
+### `permissive()` CORS on API Server
+
+**Issue:** `server.rs:96` sets `CorsLayer::permissive()`, which allows all origins, methods, and headers. This is intended for local development but is the production default.
+
+**Files:** `agent-rs/src/server.rs:96`
+
+**Impact:** If the server is accidentally exposed beyond localhost (e.g., via reverse proxy misconfiguration), any website could make cross-origin requests to the agent API.
+
+**Current mitigation:** Server binds to `127.0.0.1` only (line 105), which limits exposure.
+
+**Recommendations:** Add a config-driven CORS origin allowlist. Keep `permissive()` only when a `HELIX_DEV_MODE=1` env var is set.
+
+### Command Execution via `sh -c` / `cmd /C`
+
+**Issue:** `execute_run_terminal_command()` in `tools.rs:526-534` runs the user command string via `sh -c <command>` on Unix or `cmd /C <command>` on Windows. While the policy engine validates the command first, the actual execution still passes the entire string to a shell. If the policy validation has any gaps, the shell can interpret metacharacters.
+
+**Files:** `agent-rs/src/tools.rs:526-534`
+
+**Impact:** Shell injection risk if policy validation is bypassed. The command string is untrusted user/LLM input.
+
+**Current mitigation:** Multi-layer policy validation (`blocked_command_reason`, `ALLOWLIST`, `DANGEROUS_COMMANDS`, `block_metacharacters`). Docker sandbox in `ToolRuntime`.
+
+**Recommendations:** Always use Docker sandbox for terminal commands (the sandboxed path uses array-based invocation, not shell string). Extend the policy engine to support argument-level validation.
+
+### Prompt Injection Detection Is Regex-Only
+
+**Issue:** `is_prompt_injection_pattern()` in `policy.rs:540-553` uses a hardcoded set of regex patterns to detect prompt injection attempts. This is a weak defense against adversarial inputs.
+
+**Files:** `agent-rs/src/security/policy.rs:540-553`
+
+**Impact:** Easily bypassable by sophisticated attacks. The patterns are case-insensitive substring matches that only cover obvious exfiltration attempts.
+
+**Current mitigation:** Patterns include: "ignore previous instructions", "forget", "exfiltrat", "steal secret".
+
+**Recommendations:** Integrate with the Guardian module (`guardian.rs`) for LLM-based injection detection. Add more comprehensive pattern coverage.
+
+### OS-Level Commands in Diagnostics Require Privileges
+
+**Issue:** Multiple diagnostic functions run OS-level commands that require elevated privileges (`systemctl`, `journalctl`, `vssadmin`). These can fail silently or produce misleading errors.
+
+**Files:** 
+- `agent-rs/src/agent_core/diagnostics/system.rs:142-158` — `systemctl status`
+- `agent-rs/src/agent_core/diagnostics/logs.rs:24-27` — `journalctl`
+- `agent-rs/src/agent_core/repair/snapshots.rs:42-43` — `vssadmin` (Windows)
+
+**Impact:** Non-root/non-admin users will get permission errors trying to use diagnostic tools.
+
+**Current mitigation:** Errors are gracefully returned as strings to the caller.
+
+**Recommendations:** Add capability detection at startup and disable privileged features when not available, with clear messaging.
+
+## Performance Concerns
+
+### Token Budget Ceiling at 40k Without Dynamic Adjustment
+
+**Issue:** `DEFAULT_TOKEN_BUDGET` in `budget.rs:8` is set to 40,000 tokens. While this is documented as a ceiling, there is no mechanism to dynamically adjust based on model context window or hardware constraints.
+
+**Files:** `agent-rs/src/context/budget.rs:8`
+
+**Impact:** May exceed available context on smaller models (e.g., 8k context models get 40k budget which is never met anyway). Conversely, wastes potential on larger models.
+
+**Current mitigation:** The 70% threshold compaction in `main.rs` acts as a secondary guard.
+
+**Recommendations:** Derive token budget from `app_config.context_size` with a configurable ratio (e.g., 60% of context window).
+
+### Synchronous Token Counting on Hot Path
+
+**Issue:** `tokens::count_message_tokens()` calls `tiktoken-rs::cl100k_base()` which initializes the BPE encoder on first call. This involves loading and caching a large tokenizer table.
+
+**Files:** `agent-rs/src/tokens.rs`
+
+**Impact:** First call is slow (~100-500ms). Called before every LLM request for context threshold detection.
+
+**Current mitigation:** The encoder is cached by `tiktoken-rs` after first load.
+
+**Recommendations:** Pre-load the tokenizer at startup. Consider approximate counting (char/4) for threshold checks, reserving precise counting for the final budget decision.
+
+### 30-Second Tool Timeout May Be Too Short
+
+**Issue:** `tool_runtime.rs:86` wraps tool execution in a 30-second timeout via `tokio::time::timeout`.
+
+**Files:** `agent-rs/src/agent_core/tool_runtime.rs:85-86`
+
+**Impact:** Long-running commands (e.g., `cargo build`, `npm install`, `git clone`) will consistently time out, making the tool appear "broken" to the LLM.
+
+**Current mitigation:** None — hard-coded timeout.
+
+**Recommendations:** Make timeout configurable via environment variable or tool parameter. Support different timeouts for different tool types (e.g., 30s for read tools, 5min for build tools).
+
+## Cross-Platform Issues
+
+### Windows Shell Quoting Is Different
+
+**Issue:** `execute_run_terminal_command()` in `tools.rs:526-534` uses `cmd /C <command>` on Windows vs `sh -c <command>` on Unix. Windows `cmd.exe` has different quoting rules (single quotes don't prevent expansion), so LLM-generated commands that work on Linux may fail on Windows.
+
+**Files:** `agent-rs/src/tools.rs:526-534`
+
+**Impact:** Commands generated by the LLM (trained primarily on Unix) will often fail on Windows due to quoting differences.
+
+**Current mitigation:** None.
+
+**Recommendations:** Add a quoting translation layer for Windows. Consider using PowerShell (`pwsh`) for better cross-platform compatibility.
+
+### Docker Sandbox Requires Docker Daemon
+
+**Issue:** The `DockerSandbox` in `sandbox.rs` requires Docker to be installed, running, and accessible. It connects via the local Docker socket (`Docker::connect_with_local_defaults()`).
+
+**Files:** `agent-rs/src/security/sandbox.rs:75-77`
+
+**Impact:** The sandbox is unavailable on systems without Docker. The agent silently falls back to non-sandboxed command execution via `tools.rs:526-534`.
+
+**Current mitigation:** `ToolRuntime::execute_sandboxed_command()` in `tool_runtime.rs:289` is only called for `run_terminal_command` — the sandbox is integral to the security model.
+
+**Recommendations:** Document Docker as a hard dependency for secure operation. Provide a non-Docker sandbox fallback (e.g., seccomp, Landlock, or Wasm-based).
+
+### Self-Repair System Is Linux-Only
+
+**Issue:** The `SnapshotManager` (snapshots.rs) uses `tar` on Linux and `vssadmin` on Windows. The Windows `vssadmin` requires Administrator and the restore function returns "not implemented".
+
+**Files:** `agent-rs/src/agent_core/repair/snapshots.rs`
+
+**Impact:** Self-repair (backup/restore before file modifications) is effectively Linux-only.
+
+**Current mitigation:** The `create_snapshot()` and `restore_snapshot()` functions return platform-specific errors.
+
+**Recommendations:** Implement a filesystem-copy-based snapshot system that works cross-platform without requiring admin privileges.
+
+### Service Introspection Requires Privileges
+
+**Issue:** `SystemProvider::get_service_status()` in `system.rs:138-190` uses `systemctl` on Linux (requires root or sudo) and `windows-service` crate on Windows (requires appropriate service permissions).
+
+**Files:** `agent-rs/src/agent_core/diagnostics/system.rs:138-190`
+
+**Impact:** Service introspection will fail for non-privileged users.
+
+**Current mitigation:** Errors are returned as strings to the caller.
+
+**Recommendations:** Check for capabilities/permissions and return a clear "requires admin" message rather than a cryptic error.
+
+## Missing Features
+
+### No Graceful Degradation for LLM Server Failures
+
+**Issue:** When the model server fails, `maybe_boot_model_server()` in `main.rs:439-519` attempts to restart it up to 3 times with a 5-minute cooldown (line 596). There's no fallback mode (e.g., "offline with cached responses" or "read-only knowledge base").
+
+**Files:** `agent-rs/src/main.rs:596` — `Watchdog::new(3, 300)` (3 restarts, 5 min cooldown)
+
+**Impact:** After 3 failures in 5 minutes, the agent is completely unavailable until the user manually restarts.
+
+**Current mitigation:** None.
+
+**Recommendations:** Implement a degraded mode that at minimum reports the last successful state and suggests recovery actions.
+
+### No Feedback for Context Compaction Failures
+
+**Issue:** Both LLM loops attempt context compaction on failure (main.rs:1246, 1723) but simply ignore the error if the compaction LLM call fails — the conversation continues without compaction.
+
+**Files:** `agent-rs/src/main.rs:1246-1262, 1723-1738`
+
+**Impact:** Silently exceeding context window limits leads to model degradation (hallucination, repetition) without the user knowing.
+
+**Current mitigation:** None — errors are silently ignored.
+
+**Recommendations:** Add a user-visible warning when compaction fails, suggesting manual context clearing.
+
+## Test Coverage Gaps
+
+### No Rust Integration Tests
+
+**Issue:** The codebase has 11 Python test files but zero Rust integration tests. All Rust tests are unit tests within modules.
+
+**Files:** `tests/` (Python only), `agent-rs/src/*.rs` (inline `#[cfg(test)]` only)
+
+**Impact:** The main event loop, LLM interaction pipeline, tool execution, stream parsing, and server endpoints have no test coverage. Only isolated unit tests exist.
+
+**Risk:** High — refactoring `main.rs` would be completely untested.
+
+**Priority:** High
+
+### No Web Server Tests
+
+**Issue:** `server.rs` has 5 HTTP endpoints (`/chat`, `/health`, `/v1/status`, `/v1/tools`, `/v1/context`) with no test coverage.
+
+**Files:** `agent-rs/src/server.rs`
+
+**Risk:** Medium — breaking changes to the API won't be caught.
+
+**Priority:** Medium
+
+### No Cross-Platform CI Tests
+
+**Issue:** Tests are only run on the developer's platform. There is no CI configuration executing tests on Windows, Linux, and macOS.
+
+**Files:** No CI config detected
+
+**Risk:** High — cross-platform issues (shell quoting, file paths, service introspection) won't be caught until users report them.
+
+**Priority:** High
+
+## Dependency Risks
+
+### `tiktoken-rs` API Sensitivity
+
+**Issue:** `agent-rs/src/tokens.rs` depends on `tiktoken-rs = "0.9.1"` which wraps OpenAI's tiktoken tokenizer. The `cl100k_base()` function must succeed for token counting to work. Version `0.9.x` may have API changes.
+
+**Files:** `agent-rs/Cargo.toml:22` — `tiktoken-rs = "0.9.1"`
+
+**Impact:** If the tokenizer fails to load, all token-counting-dependent features break (context compaction threshold detection, budget enforcement).
+
+**Current mitigation:** `budget.rs:16` has a fallback estimate of `text.len() / 4`, but `tokens.rs` has no fallback — it unwraps directly.
+
+### `evtx` Crate Is Windows-Only
+
+**Issue:** `agent-rs/Cargo.toml:39` includes `evtx = "0.8.1"` for Windows EVTX log parsing. It's unconditionally compiled but only used on Windows (guarded by `#[cfg(windows)]`).
+
+**Files:** `agent-rs/Cargo.toml:39`
+
+**Impact:** Increases compile time and binary size on Linux/macOS with code that won't be used.
+
+**Current mitigation:** The code paths are `#[cfg(windows)]` guarded.
+
+**Recommendations:** Make the dependency conditional: `evtx = { version = "0.8.1", optional = true }` and enable only on Windows targets.
+
+### Python Runtime Dependency
+
+**Issue:** The Rust agent depends on Python being available at runtime to evaluate `config.py`. This is a runtime coupling to an external interpreter.
+
+**Files:** `agent-rs/src/config.rs:103` — `Command::new("python")`
+
+**Impact:** Any Python version mismatch, missing packages, or import errors prevent the agent from starting.
+
+**Current mitigation:** None.
+
+**Recommendations:** Pre-generate a JSON config file during `setup.py` install and read that directly from Rust.
+
+## Other Concerns
+
+### No Structured Logging
+
+**Issue:** All logging is done via `println!()` and `eprintln!()` macros. There is no log level (info/warn/error/debug), no structured fields, no log file rotation.
+
+**Files:** Throughout `agent-rs/src/`
+
+**Impact:** Debugging production issues is difficult. Logs are interspersed with actual output.
+
+**Current mitigation:** The `audit` module captures tool execution events, but system-level diagnostics are unstructured.
+
+**Recommendations:** Add a structured logging crate (e.g., `tracing` or `log` + `env_logger`) with level-based filtering.
+
+### History File Path Hardcoding
+
+**Issue:** `input.rs` saves terminal history to a hardcoded path. The session save path uses `$HOME/.helix/sessions` but falls back to `.helix/sessions` relative to CWD.
+
+**Files:** `agent-rs/src/session.rs:117-127`
+
+**Impact:** If running from a different directory than expected, sessions may be saved to unexpected locations.
+
+**Current mitigation:** The `HELIX_SESSION_DIR` env var can override.
+
+---
+
+*Concerns audit: 2026-07-30*
