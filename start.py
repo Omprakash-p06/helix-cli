@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import socket
 import subprocess
 from pathlib import Path
 import requests
@@ -143,6 +144,27 @@ def ask_yes_no(prompt, default_yes=True):
     return raw in ("y", "yes")
 
 
+def find_free_port(start_port, max_attempts=10):
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return None
+
+# Resolve server port: preference HELIX_SERVER_PORT env > config default > auto-increment
+requested_port = int(os.environ.get("HELIX_SERVER_PORT", str(config.SERVER_PORT)))
+free_port = find_free_port(requested_port)
+if free_port is None or free_port != requested_port:
+    if free_port is None:
+        print(f"  [!] No free port found starting from {requested_port}. Using {requested_port} anyway.")
+        free_port = requested_port
+    else:
+        print(f"  [i] Port {requested_port} is occupied; using port {free_port} instead.")
+    os.environ["HELIX_SERVER_PORT"] = str(free_port)
+
 models_dir = os.path.join(PROJECT_DIR, "models")
 models = discover_models(models_dir)
 external_model = resolve_env_model(models)
@@ -239,6 +261,7 @@ server_env = os.environ.copy()
 server_env["HELIX_MODEL_NAME"] = selected_model_name
 server_env["HELIX_MODEL_PATH"] = selected_model_path
 server_env["HELIX_EXEC_MODE"] = exec_mode
+server_env["HELIX_SERVER_PORT"] = os.environ.get("HELIX_SERVER_PORT", str(config.SERVER_PORT))
 
 server_proc = subprocess.Popen(
     [sys.executable, os.path.join(PROJECT_DIR, "scripts", "start_server.py")],
@@ -252,12 +275,14 @@ server_proc = subprocess.Popen(
 # 2. Wait for the API to come online
 def wait_for_server():
     timeout_s = int(os.environ.get("HELIX_SERVER_STARTUP_TIMEOUT_S", "180"))
+    server_port = int(os.environ.get("HELIX_SERVER_PORT", str(config.SERVER_PORT)))
+    base_url = f"http://127.0.0.1:{server_port}/v1/models"
     for _ in range(max(1, timeout_s)):
         # Fail fast if bootstrap process has already died.
         if server_proc.poll() is not None:
             return False, "exited"
         try:
-            res = requests.get("http://127.0.0.1:8080/v1/models", timeout=2)
+            res = requests.get(base_url, timeout=2)
             if res.status_code == 200:
                 return True, "ready"
         except Exception:
@@ -294,8 +319,9 @@ if not ready:
 
         lowered = err_tail.lower()
         if "couldn't bind http server socket" in lowered or "address already in use" in lowered:
-            print("  [Diagnosis] Port 8080 is already occupied, so llama-server cannot bind.")
-            print("  [Fix] Stop the process using 127.0.0.1:8080 or change SERVER_PORT in scripts/config.py.")
+            server_port = os.environ.get("HELIX_SERVER_PORT", "8080")
+            print(f"  [Diagnosis] Port {server_port} is already occupied, so llama-server cannot bind.")
+            print(f"  [Fix] Stop the process using 127.0.0.1:{server_port}, set HELIX_SERVER_PORT=<port>, or change SERVER_PORT in scripts/config.py.")
         if "pyinstaller's embedded pkg archive" in lowered:
             print("  [Diagnosis] KoboldCPP fallback binary is invalid or corrupted.")
             print("  [Fix] Re-download koboldcpp-linux-x64 via setup.py or provide a valid fallback binary.")
@@ -331,6 +357,7 @@ try:
     agent_env["HELIX_UI_MODE"] = interface_choice
     agent_env["HELIX_MODEL_NAME"] = selected_model_name
     agent_env["HELIX_MODEL_PATH"] = selected_model_path
+    agent_env["HELIX_SERVER_PORT"] = os.environ.get("HELIX_SERVER_PORT", str(config.SERVER_PORT))
 
     if interface_choice == "web":
         print("  [i] Booting Rust API and Vite Dev Server...")

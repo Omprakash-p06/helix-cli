@@ -352,6 +352,15 @@ AVAILABLE_MODELS = {
 
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
+# Allow env var override for port conflict resolution
+_env_port = os.environ.get("HELIX_SERVER_PORT", "").strip()
+if _env_port:
+    try:
+        _port = int(_env_port)
+        if 1 <= _port <= 65535:
+            SERVER_PORT = _port
+    except ValueError:
+        pass
 BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}/v1"
 KOBOLD_BIN = "koboldcpp-linux-x64"
 KOBOLDCPP_ARGS = ""
