@@ -33,6 +33,41 @@ if str(_scripts_dir()) not in sys.path:
 from model_install import finalize_verified_download, resolve_model_ref
 
 
+MODEL_PRESETS: List[Dict[str, str]] = [
+    {
+        "name": "Gemma-4-E4B-Q4_K_M",
+        "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
+        "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
+        "description": "Gemma 4 E4B (4B eff. params) — Q4_K_M, recommended for 4-8GB VRAM",
+    },
+    {
+        "name": "Gemma-4-E4B-Q8_0",
+        "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
+        "filename": "gemma-4-E4B-it-Q8_0.gguf",
+        "description": "Gemma 4 E4B (4B eff. params) — Q8_0, best quality, 8GB+ VRAM",
+    },
+    {
+        "name": "Gemma-4-E4B-mmproj",
+        "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
+        "filename": "mmproj-F16.gguf",
+        "description": "Gemma 4 E4B multimodal projector (required for vision features)",
+    },
+]
+
+
+def find_model_preset(name: str) -> Optional[Dict[str, str]]:
+    """Return the preset entry matching ``name``, or None if unknown."""
+    for preset in MODEL_PRESETS:
+        if preset["name"] == name:
+            return preset
+    return None
+
+
+def list_model_presets() -> List[Dict[str, str]]:
+    """Return a copy of all registered download presets."""
+    return list(MODEL_PRESETS)
+
+
 def normalize_repo_id(repo_id: str) -> str:
     cleaned = repo_id.strip().rstrip("/")
     if "huggingface.co/" in cleaned:
@@ -174,7 +209,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Download and install GGUF models from Hugging Face.")
     parser.add_argument("repo", nargs="?", help="Hugging Face repo ID or URL")
     parser.add_argument("--tag", help="Search popular repos by tag before downloading")
+    parser.add_argument("--preset", help="Download a named preset from MODEL_PRESETS (e.g. Gemma-4-E4B-Q4_K_M)")
     args = parser.parse_args()
+
+    if args.preset:
+        preset = find_model_preset(args.preset)
+        if preset is None:
+            print(f"\n  [!] Unknown preset '{args.preset}'. Available presets:")
+            for entry in MODEL_PRESETS:
+                print(f"    - {entry['name']}: {entry['description']}")
+            return 1
+
+        print(f"\n  Downloading preset: {preset['name']}")
+        print(f"    {preset['description']}")
+        try:
+            final_path = download_file(preset["hf_repo"], preset["filename"])
+            mutate_config(preset["filename"])
+            print(f"\n  Installed model: {final_path}")
+            print("\n" + "=" * 55)
+            print("  Wizard Complete. You can now run `python start.py`.")
+            print("=" * 55)
+            return 0
+        except KeyboardInterrupt:
+            print("\n  [!] Download cancelled by user.")
+            return 1
+        except Exception as exc:
+            print(f"\n  [!] Download failed: {exc}")
+            return 1
 
     repo_input = args.repo or input("\n  Enter Hugging Face Repo ID or URL (e.g. 'Bartowski/Meta-Llama-3-8B-Instruct-GGUF'): ")
     repo_id = normalize_repo_id(repo_input)
