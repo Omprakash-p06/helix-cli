@@ -9,6 +9,9 @@ agent-rs/target/
 # Test-generated SQLite audit databases (written to cwd by cargo test)
 test_audit*.db
 
+# Test-generated eval suite JSON report (written to cwd by cargo test)
+agent-rs/eval-results.json
+
 # C/C++ build artifacts
 llama.cpp/build/
 
