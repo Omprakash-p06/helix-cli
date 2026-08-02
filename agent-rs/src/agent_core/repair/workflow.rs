@@ -49,6 +49,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[cfg(target_os = "linux")] // tar snapshot/rollback path is Linux-only (Windows VSS restore is not implemented)
     fn test_safety_loop_rollback_on_failure() {
         let backup_dir = tempdir().unwrap();
         let source_dir = tempdir().unwrap();

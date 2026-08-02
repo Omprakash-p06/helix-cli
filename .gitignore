@@ -6,6 +6,9 @@ models/
 # Rust build artifacts
 agent-rs/target/
 
+# Test-generated SQLite audit databases (written to cwd by cargo test)
+test_audit*.db
+
 # C/C++ build artifacts
 llama.cpp/build/
 

@@ -664,6 +664,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg(not(target_os = "windows"))] // Windows canonicalize returns \\?\ verbatim paths; POSIX semantics assumed
         fn path_tokens_are_canonicalized_inside_workspace() {
             let workspace = workspace_root();
             std::fs::write(workspace.join("src/lib.rs"), "pub fn main() {}").unwrap();
@@ -740,6 +741,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg(not(target_os = "windows"))] // relies on POSIX /etc/hostname diagnostic path
         fn diagnostic_paths_allowed_beyond_workspace() {
             let workspace = workspace_root();
             // /etc is in the allowlist

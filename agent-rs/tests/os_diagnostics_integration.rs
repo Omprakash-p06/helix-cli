@@ -4,6 +4,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 #[tokio::test]
+#[cfg(target_os = "linux")] // journalctl-based log introspection is Linux-only
 async fn test_phase02_log_introspection() {
     let registry = create_default_registry();
     let tool = registry.get("get_system_logs").expect("tool exists");
@@ -80,6 +81,7 @@ async fn test_phase02_file_introspection() {
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "windows"))] // relies on POSIX /etc/shadow sandbox semantics
 async fn test_phase02_security_guardrails() {
     let registry = create_default_registry();
     let ctx = PolicyContext {

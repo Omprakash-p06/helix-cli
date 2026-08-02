@@ -910,18 +910,21 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(target_os = "windows"))] // relies on POSIX /etc diagnostic paths
     fn search_system_files_allows_benign_diagnostic_paths() {
         let resolved = enforce_sandbox("/etc/hostname").expect("/etc/hostname should be allowed");
         assert!(resolved.starts_with("/etc"));
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))] // relies on POSIX /etc/shadow diagnostic path
     fn search_system_files_blocks_sensitive_paths() {
         let err = enforce_sandbox("/etc/shadow").expect_err("/etc/shadow should be blocked");
         assert!(err.contains("SECURITY VIOLATION"));
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))] // relies on POSIX /etc/shadow diagnostic path
     fn search_system_files_tool_surface_blocks_sensitive_paths() {
         let result = execute_search_system_files(SearchSystemFilesInput {
             query: "root".to_string(),

@@ -10,8 +10,15 @@ use serde_json::json;
 use std::env;
 use tempfile::tempdir_in;
 
+/// Serializes the two tests that call `env::set_current_dir`. Artifact paths
+/// are cwd-relative (`.planning/phases/...`), so parallel execution of these
+/// tests races the process-global cwd and intermittently fails artifact loads
+/// (e.g. "Previous Plan:" missing in test_full_flow_integration).
+static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn test_full_flow_integration() {
+    let _cwd_guard = CWD_LOCK.lock().await;
     let temp_dir = tempdir_in(env::temp_dir()).unwrap();
     env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -120,6 +127,7 @@ fn test_recovery_cycle_on_execute_failure() {
 
 #[tokio::test]
 async fn test_protocol_validation() {
+    let _cwd_guard = CWD_LOCK.lock().await;
     let temp_dir = tempdir_in(env::temp_dir()).unwrap();
     let db_path = temp_dir.path().join("audit.db");
     
