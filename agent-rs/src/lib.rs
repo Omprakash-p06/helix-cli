@@ -14,6 +14,7 @@ pub mod watchdog;
 pub mod audit;
 pub mod agent_core;
 pub mod context;
+pub mod eval;
 
 pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};
 
