@@ -379,6 +379,8 @@ def build_model_entry(model_name: str, vram_gb: Optional[int] = None) -> Dict[st
         "ubatch_size": variant["ubatch_size"],
         "guidance": variant["guidance"],
         "detected_vram_gb": vram_gb,
+        "jinja": variant.get("jinja", False),
+        "mmproj_filename": variant.get("mmproj_filename"),
     }
 
 

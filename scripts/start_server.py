@@ -147,6 +147,25 @@ def run_llama_server(model_path):
         cmd.extend(["--no-mmap"])  # Required for machines sharing GPU/CPU memory pool
         # No GPU flags for pure CPU
 
+    # Read variant metadata from the model profile
+    model_profile = config.build_model_entry(
+        os.environ.get("HELIX_MODEL_NAME", config.MODEL_NAME),
+        config.DETECTED_VRAM_GB
+    )
+
+    # Add --jinja flag if model requires Jinja2 template rendering (e.g., Gemma 4)
+    if model_profile.get("jinja"):
+        cmd.append("--jinja")
+
+    # Add --mmproj flag if model requires a multimodal projector
+    mmproj_filename = model_profile.get("mmproj_filename")
+    if mmproj_filename:
+        mmproj_path = os.path.join(config.MODELS_DIR, mmproj_filename)
+        if os.path.isfile(mmproj_path):
+            cmd.extend(["--mmproj", mmproj_path])
+        else:
+            print(f"[Warning] mmproj file not found: {mmproj_path}. Vision features disabled.")
+
     print(f"  Command: {' '.join(cmd)}")
     try:
         process = subprocess.Popen(cmd)
