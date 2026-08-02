@@ -160,14 +160,11 @@ impl SystemProvider {
 
         #[cfg(target_os = "windows")]
         {
-            use windows_service::service_control_manager::{ServiceControlManager, ServiceControlManagerAccess};
+            use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
             use windows_service::service::{ServiceAccess};
-            
-            let scm = match ServiceControlManager::local() {
-                Ok(scm) => match scm.open(ServiceControlManagerAccess::CONNECT) {
-                    Ok(scm) => scm,
-                    Err(e) => return format!("Failed to open SCM: {}", e),
-                },
+
+            let scm = match ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT) {
+                Ok(scm) => scm,
                 Err(e) => return format!("Failed to connect to SCM: {}", e),
             };
 
