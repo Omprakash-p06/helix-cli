@@ -576,8 +576,18 @@ async fn send_with_recovery(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading configuration from python runtime...");
-    let app_config = config::AppConfig::load_from_python()?;
+    let mut app_config = config::AppConfig::load_from_python()?;
     let client = Client::builder().user_agent("HelixAgent/0.1.0").build()?;
+
+    // Probe backend capabilities (async — runs once at startup)
+    let probed_caps = config::probe_backend_capabilities(&app_config, &client).await;
+    app_config.backend_capabilities = probed_caps;
+    println!(
+        "[Runtime] Backend capabilities probed: model={}, function_calling={}, context_window={}",
+        app_config.backend_capabilities.model_id,
+        app_config.backend_capabilities.function_calling,
+        app_config.backend_capabilities.context_window,
+    );
 
     // CPU-first runtime profile selection (PERF-04)
     let mut system = sysinfo::System::new_all();
