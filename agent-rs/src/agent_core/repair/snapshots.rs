@@ -1,6 +1,5 @@
 use std::process::Command;
 use std::path::{Path, PathBuf};
-use std::fs;
 
 #[derive(Debug)]
 pub enum SnapshotError {
@@ -15,6 +14,9 @@ impl From<std::io::Error> for SnapshotError {
     }
 }
 
+// backup_dir / sources are only read on Linux (tar snapshot path); the Windows
+// VSS path does not touch them, hence allow(dead_code) for Windows builds.
+#[allow(dead_code)]
 pub struct SnapshotManager {
     backup_dir: PathBuf,
     sources: Vec<PathBuf>,
@@ -52,6 +54,8 @@ impl SnapshotManager {
 
         #[cfg(target_os = "linux")]
         {
+            use std::fs;
+
             if !self.backup_dir.exists() {
                 fs::create_dir_all(&self.backup_dir)?;
             }
@@ -83,7 +87,7 @@ impl SnapshotManager {
         }
     }
 
-    pub fn restore_snapshot(&self, snapshot_id: &str) -> Result<(), SnapshotError> {
+    pub fn restore_snapshot(&self, _snapshot_id: &str) -> Result<(), SnapshotError> {
         #[cfg(target_os = "windows")]
         {
             // Windows restoration via VSS is complex and usually requires external tools or specific APIs.
@@ -93,7 +97,9 @@ impl SnapshotManager {
 
         #[cfg(target_os = "linux")]
         {
-            let snapshot_path = Path::new(snapshot_id);
+            use std::fs;
+
+            let snapshot_path = Path::new(_snapshot_id);
             if !snapshot_path.exists() {
                 return Err(SnapshotError::CommandFailed("Snapshot file does not exist".to_string()));
             }

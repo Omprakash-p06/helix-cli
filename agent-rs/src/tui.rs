@@ -940,7 +940,7 @@ fn push_multiline_plain_entry(
     prefix_style: Style,
     content: &str,
 ) {
-    let clean_content = content.trim_start_matches(|c| c == '\r' || c == '\n');
+    let clean_content = content.trim_start_matches(['\r', '\n']);
     let continuation_prefix = " ".repeat(prefix.chars().count());
     let mut segments = clean_content.split('\n');
 
@@ -982,7 +982,7 @@ fn push_multiline_spans_entry(
 
         let mut text_val = chat_span.text.as_str();
         if is_first_visible_text {
-            text_val = text_val.trim_start_matches(|c| c == '\r' || c == '\n');
+            text_val = text_val.trim_start_matches(['\r', '\n']);
             if text_val.is_empty() {
                 continue;
             }

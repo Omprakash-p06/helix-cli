@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result as SqlResult, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A single extracted symbol from the codebase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,7 +233,7 @@ impl Indexer {
 
         let mut dot = String::from("digraph helix_imports {\n  rankdir=LR;\n");
         for (from, to) in &edges {
-            let from_short = from.split('/').last().unwrap_or(from);
+            let from_short = from.split('/').next_back().unwrap_or(from);
             let to_short = to.split("::").last().unwrap_or(to);
             dot.push_str(&format!("  \"{}\" -> \"{}\";\n", from_short, to_short));
         }
@@ -382,7 +382,7 @@ pub fn extract_import_edges(source: &str, file_path: &str) -> Vec<(String, Strin
 }
 
 /// Build a skeleton signature by eliding the body block if present.
-fn build_signature(source: &str, node: tree_sitter::Node, kind: &str) -> String {
+fn build_signature(source: &str, node: tree_sitter::Node, _kind: &str) -> String {
     // Find child named "body" or "block" to elide
     let body_child = node.children(&mut node.walk()).find(|c| {
         matches!(c.kind(), "block" | "declaration_list" | "enum_variant_list" | "field_declaration_list")

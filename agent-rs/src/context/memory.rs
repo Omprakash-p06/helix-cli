@@ -35,7 +35,10 @@ impl MemoryKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    /// Inverse of [`MemoryKind::as_str`]: maps a stored string back to a kind.
+    /// Named `from_name` (not `from_str`) to avoid clashing with the standard
+    /// `FromStr` trait (clippy::should_implement_trait).
+    pub fn from_name(s: &str) -> Self {
         match s {
             "goal" => Self::Goal,
             "constraint" => Self::Constraint,
@@ -183,7 +186,7 @@ impl MemoryEngine {
             Ok(MemoryEntry {
                 id: row.get(0)?,
                 session_id: row.get(1)?,
-                kind: MemoryKind::from_str(&row.get::<_, String>(2)?),
+                kind: MemoryKind::from_name(&row.get::<_, String>(2)?),
                 content: row.get(3)?,
                 created_at: row.get(4)?,
                 importance: row.get(5)?,
@@ -230,7 +233,7 @@ impl MemoryEngine {
             Ok(MemoryEntry {
                 id: row.get(0)?,
                 session_id: row.get(1)?,
-                kind: MemoryKind::from_str(&row.get::<_, String>(2)?),
+                kind: MemoryKind::from_name(&row.get::<_, String>(2)?),
                 content: row.get(3)?,
                 created_at: row.get(4)?,
                 importance: row.get(5)?,
