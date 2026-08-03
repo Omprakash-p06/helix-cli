@@ -1,165 +1,108 @@
 # Technology Stack
 
-**Analysis Date:** 2026-07-30
+**Analysis Date:** 2026-08-03
 
 ## Languages
 
 **Primary:**
-- **Rust** (edition 2024) — Core orchestrator binary (`agent-rs/src/`). The `helix-agent` binary (`agent-rs/src/main.rs`) and library crate `agent_rs` (`agent-rs/src/lib.rs`).
-- **Python 3** — Entry point launcher (`start.py`), setup/install (`setup.py`), LLM server bootstrap (`scripts/start_server.py`), model installation (`scripts/model_install.py`), hardware detection (`scripts/system_check.py`), configuration generation (`scripts/config.py`), branding, download helpers, and eval harness.
+- Python 3.10+ - Launcher (`start.py`), installer (`setup.py`), LLM server orchestration, model management, hardware detection (`scripts/`, `tests/`)
+- Rust (edition 2024) - Core agent: orchestrator, tool runtime, TUI, HTTP API, context engine (`agent-rs/`)
+- TypeScript 5.9 - Web UI (`web-ui/`)
 
 **Secondary:**
-- **TypeScript** (5.9) — Optional web UI frontend (`web-ui/src/App.tsx`, `web-ui/src/main.tsx`).
-- **CSS** — Tailwind-styled UI via `web-ui/src/App.css` and `web-ui/src/index.css`.
+- C/C++ - llama.cpp inference engine, compiled from source at setup time (`llama.cpp/`, cloned during setup, gitignored build output)
+- Bash - Server launch helper scripts (`scripts/start_agent.sh`, `scripts/start_server.sh`)
+- JavaScript - Vite/ESLint config files (`web-ui/vite.config.ts`, `web-ui/eslint.config.js`)
 
 ## Runtime
 
 **Environment:**
-- Rust binary: compiled `helix-agent` — runs directly on host OS.
-- Python runtime: CPython 3.x (required at minimum for launcher/setup scripts).
+- Python 3.10+ (required by `README.md`; no `.python-version` file)
+- Rust toolchain (edition 2024 requires recent stable, ~1.85+; auto-installed via rustup by `setup.py`; no `rust-toolchain.toml`)
+- Node.js for web-ui dev (Vite 8 requires Node 20.19+ / 22.12+; no `.nvmrc` pinned)
+- No cloud runtime — everything executes locally on the user's machine
 
-**Package Managers:**
-- **Cargo** — Rust crate manager. Lockfile: `agent-rs/Cargo.lock` (present).
-- **pip** — Python dependency manager. Dependencies: `requests`, `tqdm`, `openai`, `huggingface_hub`, `cmake`, `openvino`.
-- **npm** — Node/TypeScript frontend dependencies. Lockfile: `web-ui/package-lock.json` (present).
+**Package Manager:**
+- pip - Python (no `requirements.txt`; `setup.py` installs inline: `requests`, `tqdm`, `openai`, `huggingface_hub`, `cmake`, `openvino`)
+- cargo - Rust, lockfile `agent-rs/Cargo.lock` present
+- npm - web-ui, lockfile `web-ui/package-lock.json` present
 
 ## Frameworks
 
-**Core — Rust:**
-| Framework | Version | Purpose |
-|-----------|---------|---------|
-| `tokio` | 1.43.0 | Async runtime (full feature set: multi-thread, net, io, sync, process) |
-| `axum` | 0.7 | HTTP REST + SSE web server for web UI mode |
-| `tower-http` | 0.5 | CORS middleware for axum |
-| `reqwest` | 0.12.9 | HTTP client (JSON + stream features, used for LLM API calls & web research) |
-| `serde` / `serde_json` | 1.0 | JSON serialization across the entire codebase |
-| `schemars` | 1.2.1 | JSON Schema generation for tool definitions |
-| `tiktoken-rs` | 0.9.1 | OpenAI cl100k_base token counting |
-| `ratatui` | 0.26 | TUI framework (terminal user interface) |
-| `crossterm` | 0.27 | Terminal backend for ratatui |
-| `async-openai` | 0.33.1 | OpenAI API client (used for LLM completions) |
-
-**Core — Python:**
-| Library | Purpose |
-|---------|---------|
-| `requests` | HTTP downloads (HuggingFace models, KoboldCPP binary, LLM API probes) |
-| `openai` | Python-side OpenAI client (eval harness) |
-| `huggingface_hub` | HuggingFace model repository interaction (setup.py) |
-| `tqdm` | Download progress bars |
-
-**Web UI — TypeScript/React:**
-| Framework | Version | Purpose |
-|-----------|---------|---------|
-| React | 19.2.4 | UI component library |
-| Vite | 8.0.1 | Build tool and dev server |
-| Tailwind CSS | 3.4.19 | Utility-first CSS |
-| TypeScript | 5.9.3 | Type-safe frontend code |
-| react-markdown | 10.1.0 | Markdown rendering in chat messages |
-| lucide-react | 0.577.0 | Icon library |
-| rehype-raw | 7.0.0 | Raw HTML passthrough for markdown |
+**Core:**
+- axum 0.7 - Rust HTTP API server (web mode, binds `127.0.0.1:3000` in `agent-rs/src/server.rs`)
+- tokio 1.43 - Async runtime (features `["full"]`)
+- React 19.2 - Web UI (`web-ui/src/App.tsx`)
+- Vite 8 - Web UI dev server / bundler (`web-ui/vite.config.ts`, no proxy configured)
+- Tailwind CSS 3.4 - Web UI styling (`web-ui/tailwind.config.js`)
+- ratatui 0.26 + crossterm 0.27 - Terminal TUI (`agent-rs/src/tui.rs`, `agent-rs/src/tui/`)
+- llama.cpp - Local LLM inference backend, built via CMake with GGML_CUDA/GGML_VULKAN/GGML_OPENVINO flags (`setup.py` `build_llama_cpp`)
+- KoboldCPP - Fallback inference binary (downloaded from GitHub releases, `setup.py` `KOBOLD_URLS`)
 
 **Testing:**
-| Framework | Version | Purpose |
-|-----------|---------|---------|
-| Rust `#[cfg(test)]` | — | Inline unit tests in source files |
-| Rust integration tests | — | 15 test files in `agent-rs/tests/` |
-| `mockall` | 0.13 | Rust mock object framework (dev-dependency) |
-| `tempfile` | 3.10 | Temp directory helpers for tests (dev-dependency) |
-| Python `pytest` | — | Python test suite (`tests/test_*.py`) |
+- pytest - Python unit tests (9 files in `tests/test_*.py`, run via `python -m pytest`)
+- cargo test - Rust unit + integration tests (24 integration files in `agent-rs/tests/`; dev-deps: `mockall 0.13`, `mockito 1.4`, `tempfile 3.10`)
+- `tests/eval.py` - Agentic benchmark suite (drives the built agent binary against a local model judge; outputs `tests/benchmark_results.md`)
+- No JavaScript test framework configured in `web-ui/package.json`
+
+**Build/Dev:**
+- CMake - llama.cpp build (setup.py invokes `cmake -S llama.cpp -B llama.cpp/build` with backend flags)
+- TypeScript compiler (`tsc -b`) - web-ui type checking/build
+- Vite - web-ui bundling
+- `scripts/build_zip.py` - Packaged zip distribution builder
 
 ## Key Dependencies
 
-**Critical — Rust:**
-| Crate | Version | Why It Matters |
-|-------|---------|----------------|
-| `async-openai` | 0.33.1 | Primary interface to LLM backends via OpenAI-compatible API |
-| `reqwest` | 0.12.9 | All HTTP communication: LLM API calls, web research fetching, HuggingFace |
-| `rusqlite` | 0.39.0 | SQLite for audit chain (`src/audit.rs`) and context engine (`src/context/indexer.rs`) |
-| `tree-sitter` | 0.24 | Symbol extraction from source code in context engine |
-| `bollard` | 0.20.2 | Docker API — sandboxed command execution (`src/security/sandbox.rs`) |
-| `tiktoken-rs` | 0.9.1 | Token counting for context budget management |
-| `scraper` | 0.21 | HTML parsing for web research pipeline |
-| `petgraph` | 0.6 | Graph-based dependency tracking in context engine (import edges) |
-| `sha2` | 0.11.0 | SHA-256 hashing for audit chain integrity and file invalidation |
-| `governor` | 0.6 | Rate limiting for web research worker pool |
-| `chrono` | 0.4.44 | Timestamps for audit events and logs |
-| `regex` | 1 | Pattern matching in policy engine |
-| `shell-sanitize` | 0.1.0 | Shell argument sanitization for security |
-| `path-security` | 0.2.0 | Path traversal protection |
-| `gbnf` | 0.2.6 | GBNF grammar generation for constrained tool-calling |
-| `evtx` | 0.8.1 | Windows Event Log parsing for diagnostics |
+**Critical:**
+- async-openai 0.33.1 - OpenAI-compatible client used to talk to the local llama-server/koboldcpp `/v1` API (`agent-rs/src/main.rs`)
+- reqwest 0.12.9 - HTTP client (local LLM calls, web research, backend probing) (`agent-rs/src/config.rs`, `agent-rs/src/server.rs`)
+- rusqlite 0.39 (bundled) - Embedded SQLite for command audit log (`agent-rs/src/audit.rs`, writes `logs/audit.db`)
+- bollard 0.20.2 - Docker SDK for sandboxed command execution (`agent-rs/src/security/sandbox.rs`)
+- huggingface_hub - GGUF model downloads (with `requests` fallback) (`scripts/model_install.py`, `scripts/download_model.py`)
+- gbnf 0.2.6 - GBNF grammar sampling for constrained tool-call generation (`agent-rs/src/main.rs`)
 
-**Infrastructure — Python:**
-| Library | Purpose |
-|---------|---------|
-| `openvino` | Intel OpenVINO backend for llama.cpp |
-| `cmake` | Build tool for compiling llama.cpp with hardware optimizations |
-
-**Build / Toolchain:**
-| Tool | Purpose |
-|------|---------|
-| Rust `cargo` | Rust compilation pipeline |
-| Python `pip` | Python dependency installation |
-| CMake | llama.cpp build system |
-| `vswhere.exe` | Visual Studio detection (Windows C++ build tools) |
-| `winget` | Windows package manager (VS Build Tools auto-install) |
-| `nvidia-smi` | GPU VRAM detection (queried from Python `config.py`) |
+**Infrastructure:**
+- tree-sitter 0.24 + tree-sitter-rust 0.23 - Codebase search/indexing (`agent-rs/src/context/indexer.rs`)
+- tiktoken-rs 0.9.1 - `cl100k_base` token counting for context budgeting (`agent-rs/src/tokens.rs`)
+- scraper 0.21 + htmd 0.1 - HTML scraping → markdown for web research (`agent-rs/src/agent_core/web_research/`)
+- rustyline 15 - Terminal REPL (`agent-rs/src/main.rs`)
+- tokio-stream / futures-util / bytes - SSE streaming for web mode (`agent-rs/src/server.rs`)
+- evtx 0.8.1 - Windows event log parsing (diagnostics)
+- governor 0.6 - Rate limiting (tool execution)
+- windows-service 0.8.0 / service-manager 0.11 - Windows service management (diagnostics)
+- sysinfo 0.38 / network-interface / num_cpus - System stats collection
 
 ## Configuration
 
-**Environment Variables:**
-- `HELIX_MODEL_NAME`, `HELIX_MODEL_PATH` — Model selection
-- `HELIX_SERVER_PORT` — LLM server TCP port (default 8080)
-- `HELIX_EXEC_MODE` — `chat` or `agentic`
-- `HELIX_UI_MODE` — `tui` or `web`
-- `HELIX_GPU_LAYERS`, `HELIX_GPU_VRAM_GB` — GPU offload settings
-- `HELIX_BACKEND_HINT` — `cuda`, `vulkan`, `openvino`, `cpu`
-- `HELIX_BATCH_SIZE`, `HELIX_UBATCH_SIZE`, `HELIX_CPU_THREADS`, `HELIX_CONTEXT_SIZE` — Runtime performance tuning
-- `HELIX_RUNTIME_PROFILE` — `LatencyCpu`, `BalancedCpu`, `SafeRecovery`
-- `HELIX_FORCE_TOOL_GRAMMAR` — Force GBNF grammar for tool calling
-- `HELIX_CHAT_MAX_TOKENS` — Max tokens per chat response (default 1024)
-- `HELIX_MIN_TOK_S` — Minimum token/s threshold during setup (default 10.0)
-- `HELIX_MIN_CONTEXT_SIZE` — Minimum context window (default 4096)
-- `HELIX_SERVER_STARTUP_TIMEOUT_S` — Server startup timeout (default 180)
-- `HELIX_RECOVERY_RETRY_ATTEMPTS` — Retries after model server recovery (default 45)
-- `HELIX_HTTP_RETRY_DELAY_MS` — HTTP retry delay (default 1000)
-- `HELIX_RUN_AGENTIC_PREFLIGHT` — Toggle for setup benchmark suite
-- `AGENT_PERSONA` — `os_assistant`, `coder`, or `researcher`
+**Environment:**
+- No `.env` files and no dotenv; configuration via environment variables (all prefixed `HELIX_`) plus generated `scripts/config.py`
+- Key env vars: `HELIX_MODEL_NAME`, `HELIX_MODEL_PATH`, `HELIX_SERVER_PORT` (default 8080), `HELIX_CONTEXT_SIZE`, `HELIX_GPU_LAYERS`, `HELIX_BACKEND_HINT`, `HELIX_BATCH_SIZE`, `HELIX_UBATCH_SIZE`, `HELIX_CPU_THREADS`, `HELIX_UI_MODE` (`terminal`/`tui`/`web`), `HELIX_EXEC_MODE` (`agentic`/`chat`), `HELIX_SANDBOX`, `HELIX_SESSION_DIR`, `HELIX_PROFILE_PATH`, `HELIX_RUNTIME_PROFILE`, `HELIX_MIN_CONTEXT_SIZE`, `HELIX_MIN_TOK_S`, `HELIX_JUDGE_URL`, `HELIX_EVAL_MAX_TASKS`, `KOBOLDCPP_ARGS`
+- Runtime settings stored in `scripts/config.py` (generated by `setup.py`; static model catalog + detection fallback also present there)
+- Rust agent loads config by executing Python bridge (`agent-rs/src/config.rs` `load_from_python` → `python -c` → JSON)
+- User profile persisted at `~/.helix/onboarding_profile.json`; sessions at `~/.helix/sessions/` (`scripts/onboarding_profile.py`)
 
-**Config Files:**
-- `scripts/config.py` — Generated by `setup.py`; loaded by both Python (server launcher) and Rust (via `load_from_python()` which execs the Python config and captures JSON).
-- `.helix/helix_context.db` — SQLite database for context engine symbol cache.
-- `logs/audit.db` — SQLite database for tamper-evident audit chain.
-- `.helix/backups/` — Snapshot directory for repair safety loop.
-- `logs/` — Runtime logs (stdout, stderr from llama-server).
-
-**Build Configuration:**
-- `agent-rs/Cargo.toml` — Rust crate manifest (bin: `helix-agent`, lib: `agent_rs`)
-- `setup.py` — Full installation pipeline: hardware detection, model download, llama.cpp build, Rust build, config generation, speed gate, benchmark
-- `web-ui/vite.config.ts` — Vite build config
-- `web-ui/tsconfig.json`, `tsconfig.app.json`, `tsconfig.node.json` — TypeScript configs
-- `web-ui/tailwind.config.js` — Tailwind CSS config
-- `web-ui/postcss.config.js` — PostCSS config
+**Build:**
+- `agent-rs/Cargo.toml` - Rust manifest
+- `web-ui/tsconfig.json`, `tsconfig.app.json`, `tsconfig.node.json` - TypeScript compiler options
+- `web-ui/vite.config.ts` - Vite config
+- `web-ui/tailwind.config.js`, `web-ui/postcss.config.js` - CSS pipeline
+- `web-ui/eslint.config.js` - ESLint 9 flat config
+- No CI configuration (no `.github/` directory)
 
 ## Platform Requirements
 
 **Development:**
-- Rust toolchain (via rustup)
-- Python 3.x with pip
-- CMake (installed via pip if missing)
-- C++ build tools (Visual Studio on Windows, build-essential on Linux)
-- Node.js 18+ (for web-ui development)
-- nvidia-smi (optional, for CUDA GPU detection)
-- Docker (optional, for sandboxed execution)
+- Cross-platform: Windows, Linux, macOS (detected via `platform.system()` throughout `setup.py`)
+- Windows: Visual Studio Build Tools with C++ workload required for llama.cpp build (auto-detected via `vswhere`/`vcvars64.bat`, auto-installed via winget); Rust toolchain installed via winget/rustup-init
+- CUDA toolkit optional (auto-installed via winget); OpenVINO installed via pip on Intel-hinted setups
+- llama.cpp cloned from `https://github.com/ggerganov/llama.cpp.git` at setup if `llama.cpp/CMakeLists.txt` is absent
 
 **Production:**
-- Compiled `helix-agent` binary (from `cargo build`)
-- Python 3.x runtime
-- llama.cpp compiled with hardware backend (CUDA, Vulkan, OpenVINO, or CPU)
-- GGUF model files in `models/` directory
-- KoboldCPP binary (fallback server)
-- Docker daemon (optional, for sandboxed execution)
+- Distributed as source + built artifacts; packaged via `scripts/build_zip.py` (zip archive)
+- Runs entirely offline after setup — no server-side deployment target
+- LLM backends: `llama-server` (primary, from local llama.cpp build) with CUDA → Vulkan → CPU fallback chain; KoboldCPP as last-resort fallback
 
 ---
 
-*Stack analysis: 2026-07-30*
+*Stack analysis: 2026-08-03*
+*Update after major dependency changes*

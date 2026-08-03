@@ -1,210 +1,139 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-07-30
+**Analysis Date:** 2026-08-03
+
+Multi-language repo: **Python** (launcher/setup/CLI + `scripts/` modules + `tests/`), **Rust** (`agent-rs/` agent), **TypeScript/React** (`web-ui/`, no tests). Python is the dominant convention surface. `llama.cpp/` is vendored C++ (excluded from these conventions).
 
 ## Naming Patterns
 
-**Rust Files:**
-- `snake_case.rs` for all filenames — e.g., `tool_runtime.rs`, `runtime_profile.rs`, `agent_core/mod.rs`
-- Source files under `src/` mirror module hierarchy with `mod.rs` for submodule roots
-
-**Python Files:**
-- `snake_case.py` for all filenames — e.g., `start_server.py`, `download_model.py`, `onboarding_profile.py`
+**Files:**
+- Python modules/scripts: `snake_case.py` (`model_install.py`, `start_server.py`, `download_model.py`)
+- Python tests: `test_<module>.py` in `tests/` (`test_model_install.py`, `test_qwen_config.py`)
+- Rust source: `snake_case.rs` per module, `mod.rs` for module roots (`agent-rs/src/agent_core/mod.rs`, `src/security/mod.rs`)
+- Rust integration tests: `snake_case.rs` in `agent-rs/tests/` (`tool_execution.rs`, `audit_log_mvp.rs`)
+- Web: `App.tsx`, `main.tsx` in `web-ui/src/`; configs `vite.config.ts`, `tailwind.config.js`
 
 **Functions:**
-- **Rust:** `snake_case` — `detect_server_flavor()`, `expose_think_blocks()`, `enforce_sandbox()`, `execute_read_file()`
-- **Python:** `snake_case` — `discover_models()`, `choose_default_model()`, `apply_runtime_overrides()`, `resolve_model_ref()`
+- Python: `snake_case` (`verify_model_integrity`, `build_model_entry`, `scan_models_directory`)
+- Private helpers: underscore prefix (`_safe_int`, `_normalise_command`, `_parse_parameter_count`, `_home_dir`, `_cuda_candidate_gpu_layers`)
+- CLI entry: `main(argv=None) -> int` + `if __name__ == "__main__":` guard
+- Rust: `snake_case` (`strip_reasoning_blocks`, `deduplicate_consecutive_sentences`, `clean_chat_output`)
 
 **Variables:**
-- **Rust:** `snake_case` — `app_config`, `tool_runtime`, `server_flavor`, `allowed_dir`
-- **Python:** `snake_case` — `selected_model`, `interface_choice`, `env_model_name`
+- Python: `snake_case` (`model_path`, `staged_path`, `gpu_layers`)
+- Python module-level constants: `UPPER_SNAKE_CASE` (`TRUSTED_MODELS`, `MODELS_DIR`, `BLOCKLIST`, `TIER_CONFIGS`, `DEFAULT_MODELS`, `KOBOLD_URLS`)
+- Rust: `snake_case` locals; private items have no prefix
 
-**Types (Rust):**
-- `CamelCase` for structs, enums, traits:
-  - Structs: `AppConfig`, `ChatMessage`, `AuditStore`, `ToolRuntime`, `ContextEngine`
-  - Enums: `ServerFlavor`, `PermissionResponse`, `Provenance`, `Capability`, `ToolLifecycle`
-  - Traits: `Tool`, `PermissionRequester`, `LogProvider`
-- `SCREAMING_SNAKE_CASE` for constants and statics:
-  - `READ_FILE_MAX_CHARS`, `CMD_OUTPUT_MAX_CHARS`, `DIAGNOSTIC_PATH_ALLOWLIST`
-  - `TUI_HTTP_CONNECT_FAILS` (static AtomicUsize)
-
-**Python Types:**
-- `CamelCase` for classes and dataclasses — `ModelEntry`, `TestScanModelsDirectory`
-- `SCREAMING_SNAKE_CASE` for module-level constants — `PROJECT_DIR`, `MODELS_DIR`, `KOBOLD_URLS`, `DEFAULT_MODELS`
+**Types:**
+- Python: hints from `typing` (`Dict[str, Any]`, `Optional[Path]`, `List[ModelEntry]`); dataclasses for data structs — `@dataclass(frozen=True) class ModelEntry` in `scripts/config.py:13`
+- Rust: `CamelCase` structs/enums (`AppConfig`, `BackendCapabilities`, `SseEvent`, `SseParser`), derive `Debug, Clone, Serialize, Deserialize`
 
 ## Code Style
 
-**Rust:**
-- **Edition:** 2024 (from `Cargo.toml`: `edition = "2024"`)
-- **Formatting:** Default rustfmt (no `.rustfmt.toml` present)
-- **Linting:** No clippy config file present; one `#[allow(clippy::too_many_arguments)]` annotation on `audit.rs:AuditStore::append_event`
-- **`let`/`match` idioms:** Heavy use of Rust 2024 edition `let` chains — e.g.:
-  ```rust
-  if let Some(parent) = std::path::Path::new(path).parent()
-      && !parent.as_os_str().is_empty()
-  { ... }
-  ```
-  This is the dominant conditional pattern throughout the codebase.
-- **`if let` with `&&`:** Used extensively for chained fallible conditions rather than nested `match`
+**Formatting:**
+- No formatter config detected (no black/isort/ruff config anywhere in repo)
+- 4-space indentation, double quotes for Python strings
+- Rust: rustfmt defaults (no `rustfmt.toml`); 2024 edition (`agent-rs/Cargo.toml`)
+- Web: ESLint flat config only; no semicolons in `web-ui/eslint.config.js`
 
-**Python:**
-- **Formatting:** No `.prettierrc`, `pyproject.toml`, or formatter config detected
-- **Style:** Standard PEP 8 with 4-space indentation
-- **Type hints:** Light use of `typing` module (`Optional`, `List`, `Dict`, `Any`, `Path`) in `scripts/config.py`; minimal elsewhere
+**Linting:**
+- No Python linter config; `# noqa: F401` used inline in `setup.py:99`
+- Rust: no clippy config
+- Web: `web-ui/eslint.config.js` — extends `@eslint/js` recommended + `typescript-eslint` recommended + `react-hooks` + `react-refresh`; run `npm run lint` in `web-ui/`
 
 ## Import Organization
 
-**Rust imports (`agent-rs/src/main.rs`):**
-1. `use agent_rs::{...}` — crate-level imports first (braced multi-import)
-2. `use crate::...` — internal module imports
-3. `use std::...` — standard library
-4. External crate imports — `use serde_json::...`, `use tokio::...`, `use reqwest::...`
-5. `use static` items at file level (before functions)
-- Groups separated by blank lines
-- No consistent ordering within groups (e.g., `std::sync::Arc` may appear before or after `futures_util`)
+**Order:**
+1. Standard library (`os`, `sys`, `subprocess`, `pathlib`, `typing`)
+2. Third-party (`requests`, `pytest`, `tqdm`, `huggingface_hub`)
+3. Local modules (`from model_install import install_model`, `import config`, `import system_check`)
 
-**Python imports (`start.py`):**
-1. Standard library: `import os`, `import sys`, `import time`, etc.
-2. Third-party: `import requests`
-3. Internal: `from scripts.helix_branding import ...`, `from scripts import config`
-- Groups with blank line separators
+**Grouping:**
+- Blank line between groups; stdlib alphabetical within group
+- Local imports after the sys.path bootstrap block
+- Rust: `use` at top; crate-internal via `use crate::...` (`use crate::security::policy::PermissionTier` in `agent-rs/src/config.rs:5`)
 
-## Module Organization
-
-**Rust (`src/lib.rs`):**
-- All modules declared at top of `lib.rs` as `pub mod name;`
-- No nested `pub use` re-exports except `pub use types::{ChatMessage, ChatResponse, Choice, ServerFlavor};`
-- Helper functions (`critic_message`, `expose_think_blocks`) live directly in `lib.rs`
-- Submodules use `mod.rs` convention: `security/mod.rs`, `tui/mod.rs`, `context/mod.rs`, `agent_core/mod.rs`
-
-**Python (`scripts/`):**
-- Each file is a flat module with no package `__init__.py` (no `scripts/__init__.py` detected)
-- Entry point scripts (`start.py`, `setup.py`) use `sys.path.insert(0, ...)` for module discovery
+**Path Aliases / Import mechanics:**
+- No `__init__.py` — `scripts/` is a flat importable directory
+- Scripts and tests bootstrap `sys.path` (see `tests/test_model_install.py:9`, `scripts/system_check.py:15`):
+```python
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+```
+- Root scripts import via package path: `from scripts.helix_branding import print_helix_logo` (`start.py:9`)
+- Rust tests import either `use agent_rs::...` (lib crate) or `#[path = "../src/stream.rs"] mod stream;` for binary-private modules (`agent-rs/tests/streaming_tui_refinement.rs:1`)
 
 ## Error Handling
 
-**Rust — Layered approach:**
-- **Main error type:** `Result<(), Box<dyn std::error::Error>>` in `main()` returns — catches-all
-- **Internal tool errors:** Custom `ToolResult { success: bool, output: String }` struct (NOT Rust `Result` type)
-  - Used in `tools.rs` and `agent_core/tool_runtime.rs`
-  - `success: false` with descriptive `output` string is the error pattern
-- **Propagation patterns:**
-  - `expect("descriptive message")` — used heavily in main.rs for infallible operations
-  - `map_err(|e| format!("...{}", e))?` — converting errors to `String`
-  - `unwrap_or_else(|e| { eprintln!(...); default })` — graceful degradation with warning
-  - `.ok()` — converting `Result` to `Option` when errors are tolerable
-- **No custom error enums** — `Box<dyn std::error::Error>` and `String`-based errors are the pattern
-- **Security errors:** `enforce_sandbox()` returns `Result<PathBuf, String>` where `String` is a human-readable violation message
+**Patterns:**
+- Entry points / CLI: print `[!]` message then `sys.exit(1)` — fail fast at boundaries (`setup.py`, `start_server.py`, `helix.py`)
+- Library functions: raise `ValueError` for invalid input — `validate_trusted_model_spec()` (`scripts/model_install.py:77`), `list_repo_files()` (`scripts/download_model.py:135`)
+- Expected failures return falsy/Optional instead of raising: `resolve_model_ref()` → `None`, `install_model_spec()` → `bool`, `verify_model_integrity()` → `bool`
+- Broad `except Exception` at boundaries with graceful degradation (e.g. `install_model_spec` catches and returns `False`; `setup.py:142` handles rust install failure with message + `sys.exit(1)`)
+- `try/finally` guarantees teardown: `stop_process(proc)` + close file handles (`setup.py:763`, `start.py:374`)
+- Guard clauses + early returns (`if not path.exists(): return False`)
 
-**Python:**
-- `try/except` with specific exception types — `except (FileNotFoundError, OSError, subprocess.SubprocessError):`
-- `except Exception: pass` for cleanup operations (e.g., orphaned process cleanup)
-- Broad `except Exception` for fallback paths
-- No custom exception classes defined
-
-## Result / Option Idioms
-
-**Rust `unwrap()` / `expect()` usage (high):**
-- `unwrap()` used freely in test code and in cases where failure is logically impossible
-- `expect()` used in main.rs for configuration loading, CLI argument parsing
-- Some `unwrap()` calls in `main.rs` on `Recv`, `Arc::clone`, and mpsc operations that are safe
-- `unwrap_or_default()`, `unwrap_or_else()`, `unwrap_or()` for safe fallback
+**Error Types:**
+- Throw when: invalid input, missing required metadata (no SHA256, no `.gguf` files, unpinned revision)
+- Return when: expected failure (file missing, unknown model ref, backend unavailable)
+- Rust: errors as `String` via `Result<T, String>` (`AppConfig::load_from_python() -> Result<Self, String>` in `agent-rs/src/config.rs:43`); `.unwrap()`/`.expect()` used in tests and internal code
 
 ## Logging
 
-**Rust:**
-- `println!()` and `eprintln!()` for all output — no structured logging crate
-- Prefix conventions:
-  - `[Watchdog]` — watchdog events
-  - `[Runtime]` — runtime profile selection
-  - `[Context]` — context engine operations
-  - `[Audit Warning]` — audit store failure
-  - `[Config Warning]` — config fallback
-  - `[Mode]` — mode switching
-  - `[GSD]` / `[GSD Error]` — GSD orchestration feedback
-  - `[Unknown command]` — TUI command errors
-- `eprintln!` reserved for warnings and non-fatal errors
+**Framework:** None — plain `print()`. No `logging` module, no third-party logger.
 
-**Python:**
-- `print()` for all output — no logging module
-- Prefix convention: `[i]` (info), `[✓]` (success), `[!]` (warning/error)
-- No logging levels or structured logging
+**Patterns:**
+- Status prefixes: `[!]` error/warning, `[✓]` success, `[i]` info, plus contextual `[Runtime]`, `[Model Discovery]`, `[Warning]`
+- Two-space indent for detail lines under a status line
+- Banner separators: `"-" * 55` and `"=" * 55`
+- Print the command before executing: `print(f"  $ {quote_cmd(cmd)}")` (`setup.py:55`)
+- Emoji markers in benchmark scripts (`tests/eval.py` uses ✅ ⚠️ 🔎)
 
-## Async Patterns
+## Comments
 
-**Rust:**
-- **Runtime:** `tokio` with `#[tokio::main]` entry point
-- **`tokio::sync::Mutex`** over `std::sync::Mutex` for async-shared state (e.g., `DiagnosticEngine`, `EvidenceStore`)
-- **`spawn_blocking`** — synchronous tool execution dispatched via `tokio::task::spawn_blocking` in `tool_runtime.rs`
-- **`tokio::time::timeout`** — 30-second outer timeout on tool execution
-- **`futures_util::future::join_all`** — concurrent tool execution
-- **`mpsc` channels** — for TUI event passing and `ToolLifecycle` events
-- **`Arc`** for shared ownership of long-lived state
+**When to Comment:**
+- Explain "why" and non-obvious tradeoffs: `# Do not hard-block setup on non-admin shells. Most steps (downloads/builds) work fine unprivileged...` (`setup.py:89`)
+- Document tuning rationale: `# Wider sweep for 4GB cards to expose real peak capability across offload profiles.` (`setup.py:781`)
+- Section banners: `# ─── Tier → Config Mapping (targeting ≥10 tok/s) ───` (`scripts/system_check.py:21`)
+- No boilerplate comments on obvious code
 
-## Comments & Documentation
+**Docstrings:**
+- Module-level docstrings on scripts (`setup.py:2`, `build_zip.py:2`, `helix_branding.py:2`)
+- Function docstrings on public/API functions: `detect_cpu()` (`scripts/system_check.py:75`), `apply_runtime_overrides()` (`scripts/start_server.py:28`)
+- Test docstrings describe the behavior under test
+- Rust: `///` on public items (`agent-rs/src/lib.rs:21`), `//!` module docs in integration tests (`agent-rs/tests/context_integration.rs:1`)
 
-**Rust doc comments (`///`):**
-- Used on public items: structs, enums, traits, functions
-- Markdown formatted with code blocks (triple backticks)
-- Architecture diagrams in module-level doc comments (`//!`) for `context/mod.rs`
-- Inline `//!` module-level docs for `context/mod.rs`, `agent_core/web_research/mod.rs`
-- Free-form code comments (`//`) used for section headers: `// ━━━━━━━━━━━━...`
-- Changelog-style comments: `// ── GAP-1: Interpreter sandbox routing (P0-2) ──────`
-- `// ===== SECTION HEADERS =====` for file organization
-
-**Python docstrings (`"""`):**
-- Module-level docstrings at file start — `tests/test_download_model.py`, `setup.py`, `scripts/start_server.py`
-- Function-level docstrings where behavior is non-obvious — `tests/` use them as test descriptions
-- `#` comments for inline explanation
-
-## Serialization
-
-**Rust:**
-- `#[derive(Serialize, Deserialize)]` on all data structs
-- `serde` rename attributes:
-  - `#[serde(rename_all = "camelCase")]` — for tool input structs where JSON API expects camelCase
-  - `#[serde(rename_all = "snake_case")]` — for security enums (`Capability`, `PermissionTier`)
-  - `#[serde(tag = "type", content = "payload")]` — internally tagged enums (`ToolLifecycle`)
-  - `#[serde(flatten)]` — for metadata flattening (`LogEntry`)
-  - `#[serde(skip_serializing_if = "Option::is_none")]` — for optional fields (`ChatMessage`)
-  - `#[serde(default = "fn")]` — for default values (`AppConfig.sandbox_interpreters`)
-  - `#[serde(skip)]` — for computed fields (`AppConfig.permission_tier`, `AppConfig.backend_capabilities`)
-
-## Security Patterns
-
-- **`enforce_sandbox()`** in `tools.rs` — canonicalize + prefix check against allowed directory and diagnostic allowlist
-- **`PolicyContext`** passed to every tool execution — bundles `PermissionTier`, `TrustLevel`, `exec_mode`, `workspace_root`
-- **`evaluate_tool_call()`** — centralized security gate in `security/policy.rs`
-- **`CapabilitySet`** — fine-grained capability model with `read_only()`, `guided_repair()`, `autonomous()` tiers
-- **`DockerSandbox`** — optional containerized execution for interpreter commands
-- **Secrets redaction** — `redact_secrets()` in `agent_core/diagnostics/system.rs`
-
-## Configuration Pattern
-
-- **Python-first config:** Rust loads config via `AppConfig::load_from_python()` which executes `config.py` as a subprocess and reads JSON from stdout
-- **Environment overrides:** `HELIX_*` env vars override config values (e.g., `HELIX_GPU_LAYERS`, `HELIX_BATCH_SIZE`)
-- **`RuntimeProfile` enum** (`LatencyCpu`, `BalancedCpu`, `SafeRecovery`) — profile selection via `select_runtime_profile()`
-
-## Trait Design
-
-- **`Tool` trait:** `name()`, `description()`, `schema()`, `execute()` — all tools in `tools.rs` implement it
-- **`PermissionRequester` trait:** single `request_permission()` async method
-- **`LogProvider` trait:** single `get_logs()` method with platform-specific impls
-- **`#[async_trait]`** for async trait methods
+**TODO Comments:**
+- Only one in repo: `// TODO: extract doc comments in a follow-up` in `agent-rs/src/context/indexer.rs:330` (no username/issue link)
 
 ## Function Design
 
-**Rust:**
-- Pure utility functions (`clean_chat_output`, `expose_think_blocks`) are free functions in `lib.rs` or `utils.rs`
-- Tool execution functions prefixed `execute_` — `execute_read_file()`, `execute_run_terminal_command()`
-- Boolean helper functions prefixed `should_` or `is_` — `should_retry_non_stream_after_stream_error()`, `is_transient_http_error()`
-- Tool structs are zero-sized unit structs implementing `Tool` trait
+**Size:**
+- No strict limit; `setup.py` `main()` is ~240 lines. Heavy extraction into helpers is the norm (`_safe_int`, `_measure_token_speed_once`, `_cuda_candidate_gpu_layers`)
 
-**Python:**
-- Discovery functions prefixed `discover_` / `resolve_` / `choose_`
-- Side-effect functions prefixed `ensure_` / `apply_` / `clean_`
-- Boolean helpers: `ask_yes_no()`, `has_latest()` — matches Python std naming
+**Parameters:**
+- Positional params with defaults; call sites with 6+ args pass keywords — `llm_cmd(...)` (`setup.py:699`), `generate_config(...)` (`setup.py:1245`), `install_model_spec(...)` calls
+- Optional values typed `Optional[...] = None`
+
+**Return Values:**
+- Explicit returns everywhere; guard clauses return early
+- Success/failure checks return `bool`; lookups return `Optional[X]`; CLI `main()` returns `int` exit code
+- Rust functions return `String`/`Vec`/`Result` with explicit paths
+
+## Module Design
+
+**Exports:**
+- Python CLI modules export `main(argv=None) -> int` then guard at bottom: `if __name__ == "__main__": sys.exit(main())` (`scripts/model_install.py:219`) or `main()` (`setup.py:1319`)
+- `scripts/config.py` is a computed-constants module (module-level env override block, `scripts/config.py:402`)
+- Rust: `lib.rs` declares `pub mod` for every module and `pub use` re-exports key types (`agent-rs/src/lib.rs:19`)
+- Rust submodule barrels: `mod.rs` in `agent_core/`, `context/`, `security/`, `tui/`, `web_research/`
+
+**Barrel Files:**
+- Rust `mod.rs` used as module barrels; no Python barrel/`__init__.py` pattern
 
 ---
 
-*Convention analysis: 2026-07-30*
+*Convention analysis: 2026-08-03*
+*Update when patterns change*

@@ -1,372 +1,248 @@
-<!-- refreshed: 2026-07-30 -->
 # Architecture
 
-**Analysis Date:** 2026-07-30
+**Analysis Date:** 2026-08-03
 
 ## System Overview
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             PYTHON LAYER                                     │
-│  setup.py  start.py  scripts/start_server.py  scripts/config.py              │
-│             Hardware detection, LLM server boot, config generation           │
-└──────────────────────────────────────────────────┬──────────────────────────┘
-                                                   │ spawns
-                                                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         RUST AGENT ORCHESTRATOR (agent-rs)                    │
-│                                                                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │  Config Load  │  │  LLM Client  │  │  Tool Engine  │  │  Watchdog/Audit  │  │
-│  │  `config.rs`  │  │  (reqwest)   │  │  `tools.rs`   │  │  `watchdog.rs`   │  │
-│  │               │  │  Streaming   │  │  `tool_runtime│  │  `audit.rs`      │  │
-│  │  Loads config │  │  SSE parser  │  │  .rs`         │  │                  │  │
-│  │  via Python   │  │  `stream.rs` │  │               │  │  Tamper-evident  │  │
-│  │  subprocess   │  │              │  │  12 built-in   │  │  audit log       │  │
-│  └──────┬────────┘  └──────┬───────┘  │  tools        │  └──────────────────┘  │
-│         │                  │          └──────┬────────┘                        │
-│         ▼                  ▼                 ▼                                  │
-│  ┌─────────────────────────────────────────────────────────────────────────┐  │
-│  │                        SECURITY LAYER                                   │  │
-│  │  `security/policy.rs`  `security/capabilities.rs`  `security/sandbox.rs` │  │
-│  │  PermissionTier (ReadOnly/WorkspaceWrite/FullExec)                       │  │
-│  │  PolicyEngine (allowlist + metacharacter + path traversal blocking)      │  │
-│  │  DockerSandbox (bollard) — alpine container, no network, read-only rootfs│  │
-│  └─────────────────────────────────────────────────────────────────────────┘  │
-│                           │                                                   │
-│                           ▼                                                   │
-│  ┌─────────────────────────────────────────────────────────────────────────┐  │
-│  │                        CONTEXT ENGINE                                    │  │
-│  │  `context/`                                                              │  │
-│  │  ├── Indexer   (Tree-sitter → SQLite symbol cache)                      │  │
-│  │  ├── Retrieval (Exact + FTS5 + Budget-bounded results)                   │  │
-│  │  ├── Memory    (SQLite sessions/memory/edit_ledger + FTS5)              │  │
-│  │  ├── Skeleton  (Signature extraction, body elision)                     │  │
-│  │  └── Budget    (tiktoken-rs token counting)                              │  │
-│  └─────────────────────────────────────────────────────────────────────────┘  │
-│                           │                                                   │
-│                           ▼                                                   │
-│  ┌─────────────────────────────────────────────────────────────────────────┐  │
-│  │                        AGENT CORE                                       │  │
-│  │  `agent_core/`                                                          │  │
-│  │  ├── Guardian     (multi-specialist quorum voting)                      │  │
-│  │  ├── Diagnostics  (OS-level: system, logs, Bayesian reasoning)          │  │
-│  │  ├── Repair       (snapshots, rollback, scoring, safety loop)           │  │
-│  │  ├── Web Research (classifier→planner→worker pool→evidence→synthesizer) │  │
-│  │  └── Orchestration (GSD phase state machine, artifacts, recovery)       │  │
-│  └─────────────────────────────────────────────────────────────────────────┘  │
-│                           │                                                   │
-│         ┌─────────────────┼─────────────────────┐                             │
-│         ▼                 ▼                     ▼                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐                    │
-│  │  TUI (ratatui)│  │  Web Server  │  │  Terminal REPL   │                    │
-│  │  `tui.rs`     │  │  `server.rs` │  │  `input.rs`      │                    │
-│  │  Streaming,   │  │  Axum REST   │  │  rustyline        │                    │
-│  │  command      │  │  /chat (SSE) │  │  multi-line       │                    │
-│  │  palette,     │  │  /health     │  │  input            │                    │
-│  │  themes,      │  │  /v1/status  │  │                   │                    │
-│  │  approval UI  │  │  /v1/tools   │  │                   │                    │
-│  └──────────────┘  │  /v1/context │  └──────────────────┘                    │
-│                    └──────────────┘                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       LLM BACKEND (OpenAI-compatible)                        │
-│  llama.cpp server  or  KoboldCPP  —  /v1/chat/completions endpoint           │
-└─────────────────────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           EXTERNAL SYSTEMS                                   │
-│  Docker daemon (sandbox)  —  SQLite DBs (.helix/)  —  HuggingFace (models)   │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                     UI Layer (3 interchangeable frontends)           │
+│   Terminal REPL        Ratatui TUI            Web UI                 │
+│  `agent-rs/src/`      `agent-rs/src/`      `agent-rs/src/`          │
+│  `main.rs` (rustyline)  `tui.rs` + `tui/`   `server.rs` + `web-ui/` │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ user input / SSE stream
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Agent Orchestrator (Rust, helix-agent)             │
+│  `agent-rs/src/main.rs` — LLM round-trip loop, tool dispatch        │
+│  `agent-rs/src/config.rs` — AppConfig from Python runtime           │
+│  `agent-rs/src/runtime_profile.rs` — CPU/GPU profile selection      │
+│  `agent-rs/src/watchdog.rs` — model-server restart w/ backoff       │
+│  `agent-rs/src/audit.rs` — tamper-evident audit chain (SQLite)      │
+└───────┬──────────────────────┬───────────────────────┬──────────────┘
+        │                      │                       │
+        ▼                      ▼                       ▼
+┌──────────────────┐  ┌───────────────────────┐  ┌────────────────────┐
+│ Tool Layer       │  │ Security Layer        │  │ Context Engine     │
+│ `tools.rs`       │  │ `security/policy.rs`  │  │ `context/*`        │
+│ `agent_core/     │  │ `security/sandbox.rs` │  │ indexer → SQLite   │
+│  tool_runtime.rs`│  │ `security/            │  │ retrieval/memory/  │
+│ `agent_core/     │  │  capabilities.rs`     │  │ skeleton/budget    │
+│  repair/tools.rs`│  │                       │  │ + web_research/    │
+└──────────────────┘  └───────────────────────┘  └────────────────────┘
+        │                                                    ▲
+        ▼                                                    │
+┌─────────────────────────────────────────────────────────────────────┐
+│                Local Inference Server (OpenAI-compatible /v1)       │
+│  Launcher: `scripts/start_server.py`  →  `llama.cpp/build/bin/`     │
+│  llama-server (primary) or koboldcpp (fallback), KoboldCPP flavor   │
+│  Config source: `scripts/config.py` (generated by `setup.py`)       │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Responsibilities
 
-| Component | Responsibility | Key Files |
-|-----------|----------------|-----------|
-| Python Config/Loader | Hardware detection, model download, llama.cpp build, config generation | `setup.py`, `scripts/config.py`, `scripts/system_check.py`, `scripts/model_install.py` |
-| Python Launcher | Boot LLM server, wait for readiness, launch Rust binary | `start.py`, `scripts/start_server.py` |
-| Config Bridge | Execute Python subprocess to load config as JSON | `agent-rs/src/config.rs` |
-| LLM Client | HTTP client to OpenAI-compatible endpoint, streaming SSE parser | `agent-rs/src/main.rs`, `agent-rs/src/stream.rs` |
-| Tool Registry | 13 built-in tools: terminal, file R/W, list dir, code search, system stats, process/service/logs, repair tools | `agent-rs/src/tools.rs` |
-| Tool Runtime | Execute tools with policy check, sandbox, audit, rollback lifecycle | `agent-rs/src/agent_core/tool_runtime.rs` |
-| Policy Engine | Command allowlist, metacharacter blocking, path traversal prevention, prompt injection detection | `agent-rs/src/security/policy.rs` |
-| Capability Model | Map tool names to required capabilities; CapabilitySet (read_only/guided_repair/autonomous) | `agent-rs/src/security/capabilities.rs` |
-| Docker Sandbox | bollard-based Docker container execution with no network, read-only rootfs, ALL cap_drop | `agent-rs/src/security/sandbox.rs` |
-| Context Indexer | Tree-sitter Rust parsing → SQLite symbol cache with SHA-256 incremental invalidation | `agent-rs/src/context/indexer.rs` |
-| Context Retrieval | Exact + LIKE symbol search, budget-bounded (tiktoken) result assembly | `agent-rs/src/context/retrieval.rs` |
-| Durable Memory | SQLite sessions, memory (FTS5 searchable), edit_ledger; survives compaction cycles | `agent-rs/src/context/memory.rs` |
-| Skeleton | Function signature extraction with body elision to `{ /* ... */ }` | `agent-rs/src/context/skeleton.rs` |
-| Token Budget | tiktoken-rs cl100k_base token counting with ceiling enforcement | `agent-rs/src/context/budget.rs` |
-| Context Engine Facade | Orchestrates Indexer + Retrieval + Memory + Web Research | `agent-rs/src/context/mod.rs` |
-| Diagnostics System | Process listing, system stats, network interfaces, service status, secret redaction | `agent-rs/src/agent_core/diagnostics/system.rs` |
-| Diagnostics Logs | Linux journalctl / Windows EVTX log retrieval | `agent-rs/src/agent_core/diagnostics/logs.rs` |
-| Diagnostics Reasoning | State machine (Observe→Hypothesize→Test→Synthesize→Done), Bayesian confidence scoring | `agent-rs/src/agent_core/diagnostics/reasoning.rs` |
-| Repair Snapshots | tar.gz (Linux) / VSS (Windows) snapshot create/restore | `agent-rs/src/agent_core/repair/snapshots.rs` |
-| Repair Safety Loop | Snapshot → execute → validate → rollback transactional pattern | `agent-rs/src/agent_core/repair/workflow.rs` |
-| Repair Tools | Service management, package management, permission repair | `agent-rs/src/agent_core/repair/tools.rs` |
-| Guardian | Multi-specialist quorum voting (Allow/Deny/Abstain) with configurable thresholds | `agent-rs/src/agent_core/guardian.rs` |
-| Web Research Classifier | Keyword/regex-based freshness check, configurable TTL | `agent-rs/src/agent_core/web_research/classifier.rs` |
-| Web Research Planner | Decompose query → DuckDuckGo + docs.rs fetch tasks | `agent-rs/src/agent_core/web_research/planner.rs` |
-| Web Research Worker | Concurrent fetch pool with SSRF protection, rate limiting (governor) | `agent-rs/src/agent_core/web_research/worker.rs` |
-| Web Research Store | SQLite-backed sources, evidence, citations, freshness cache | `agent-rs/src/agent_core/web_research/store.rs` |
-| Web Research Synthesizer | Budget-bounded (~1500 tok) brief assembly with citations | `agent-rs/src/agent_core/web_research/synthesizer.rs` |
-| GSD Orchestration | Phase state machine (Discover→Discuss→Plan→Execute→Verify→Close), artifacts, recovery | `agent-rs/src/agent_core/orchestration/` |
-| Audit | Hash-chained (SHA-256) tamper-evident SQLite audit log | `agent-rs/src/audit.rs` |
-| Watchdog | Server health monitoring with restart budget, exponential backoff | `agent-rs/src/watchdog.rs` |
-| TUI | ratatui-based streaming terminal UI, command palette, themes (Dark/Light/Nord/Gruvbox) | `agent-rs/src/tui.rs`, `agent-rs/src/tui/` |
-| Web Server | Axum REST API with SSE streaming, CORS | `agent-rs/src/server.rs` |
-| Session | JSON-based session persistence with atomic write | `agent-rs/src/session.rs` |
+| Component | Responsibility | File |
+|-----------|----------------|------|
+| Launcher | Model discovery, server bootstrap, interface/mode selection, teardown | `start.py` |
+| Setup | Hardware detection, llama.cpp build, config generation | `setup.py` |
+| Server launcher | Start llama-server / KoboldCPP with tuned flags, VRAM-OOM fallback | `scripts/start_server.py` |
+| System check | Hardware tiering, backend recommendation, preflight | `scripts/system_check.py` |
+| Model install | HuggingFace GGUF download, SHA-256 verify, staging | `scripts/model_install.py`, `scripts/download_model.py` |
+| Orchestrator | LLM round-trip loop, tool dispatch, context compaction, mode switching | `agent-rs/src/main.rs` |
+| Tool registry | Tool schema + execution (`run_terminal_command`, `read_file`, `write_file`, …) | `agent-rs/src/tools.rs` |
+| Tool runtime | Async wrapper: policy gate, permission prompt, 30s timeout, lifecycle events | `agent-rs/src/agent_core/tool_runtime.rs` |
+| Policy engine | Permission tiers, blocked-command patterns, trust levels | `agent-rs/src/security/policy.rs` |
+| Sandbox | Docker-based command isolation | `agent-rs/src/security/sandbox.rs` |
+| Context engine | Tree-sitter symbol index, budgeted retrieval, session memory | `agent-rs/src/context/mod.rs` + `context/*` |
+| Audit store | Hash-chained SQLite event log with tamper verification | `agent-rs/src/audit.rs` |
+| GSD orchestration | Phase state machine (Discover→…→Close), artifact persistence | `agent-rs/src/agent_core/orchestration/*` |
+| Web API | Axum server, SSE chat streaming, status/tools/context endpoints | `agent-rs/src/server.rs` |
+| Web frontend | React chat UI consuming SSE from `server.rs` | `web-ui/src/App.tsx` |
 
 ## Pattern Overview
 
-**Overall:** Hybrid Python/Rust layered agent architecture. Python handles environment setup (hardware detection, model download, build). Rust handles the agent runtime — LLM orchestration, tool execution, policy enforcement, context management, diagnostics, and UI.
-
-The agent operates in a **tool-calling loop** against an OpenAI-compatible LLM backend:
-1. Send messages + tool definitions to the LLM
-2. Parse the response for tool calls
-3. Execute tools through the ToolRuntime (with policy/sandbox/audit)
-4. Feed results back to the LLM
-5. Repeat until a final text response is produced
+**Overall:** Local-first, hybrid Python + Rust AI agent stack ("Py + Rust Hybrid Agent Stack"). Python owns bootstrap/inference; Rust owns orchestration, tooling, context, and security. The LLM inference engine runs as a separate local process speaking the OpenAI `/v1` protocol.
 
 **Key Characteristics:**
-- **Defense-in-depth security**: PolicyEngine (allowlist + metacharacter + path traversal + injection checks) + DockerSandbox + Capability tiers
-- **Symbol-aware context**: Tree-sitter-based indexing replaces naive chunking, with incremental re-indexing via SHA-256 hashing
-- **Durable memory survives compaction**: SQLite-backed MemoryEngine persists goals, constraints, decisions, and edit history across context resets
-- **Tamper-evident audit**: Hash-chained (SHA-256) audit log with chain verification
-- **Self-healing**: Watchdog with restart backoff; SafetyLoop with snapshot/rollback; DiagnosticEngine for root-cause analysis
-- **Provenance tracking**: ContentSource enum (Workspace/System/Research/Untrusted) prevents untrusted data from reaching sensitive context positions
-- **Web research pipeline**: FreshnessClassifier → ResearchPlanner → WorkerPool → EvidenceStore → EvidenceSynthesizer
+- Local-only inference — no cloud APIs; GGUF models in `models/`, inference via vendored `llama.cpp` (or KoboldCPP fallback)
+- Three interchangeable UI frontends (terminal REPL, ratatui TUI, web/SSE) driving one orchestrator core
+- Tool-calling agent loop with a hard 20-round safety cap and context compaction at 70% of the context window
+- Backend-flavor detection (`ServerFlavor::LlamaCpp | KoboldCpp | Unknown`) that switches tool-call strategy: GBNF grammar for KoboldCPP, native tool-calling otherwise
+- File/database-based state: SQLite context index + audit chain under `.helix/`, no in-memory persistence across runs
+- Self-healing model server: `watchdog.rs` restarts the inference process with backoff when HTTP requests fail transiently
 
 ## Layers
 
-**Python Layer:**
-- Purpose: Environment setup, hardware detection, model download, LLM server boot, config generation
-- Location: `setup.py`, `start.py`, `scripts/`
-- Contains: Hardware detection, package management, llama.cpp build, server launcher, interactive setup
-- Depends on: pip packages (requests, tqdm, huggingface_hub, openai), Rust toolchain, cmake
-- Used by: User (setup entry point), Rust config bridge (config values loaded via subprocess)
+**Python Bootstrap Layer:**
+- Purpose: Hardware detection, setup, model acquisition, and inference-server lifecycle
+- Contains: launchers (`start.py`, `setup.py`), server bootstrap (`scripts/start_server.py`), config (`scripts/config.py`), system check, model install, onboarding profile
+- Depends on: local llama.cpp build (`llama.cpp/build/bin/`), HuggingFace hub (optional), no Rust knowledge
+- Used by: hands control to the Rust agent via `cargo run` with `HELIX_*` env vars; the Rust side also parses `scripts/config.py` directly
 
-**Rust Entry Point:**
-- Purpose: Load config from Python, initialize all subsystems, enter UI/REPL loop
-- Location: `agent-rs/src/main.rs`
-- Contains: Server flavor detection, model readiness probing, watchdog state machine, multi-mode dispatch (TUI/web/terminal), GSD slash commands, main LLM request/response loop
-- Depends on: All other Rust modules
-- Used by: Direct invocation or via `start.py`
+**Inference Server Layer:**
+- Purpose: Serve the local model over an OpenAI-compatible HTTP API
+- Contains: spawned `llama-server` or `koboldcpp` processes; config constants and runtime overrides in `scripts/config.py`
+- Depends on: GGUF model files in `models/`
+- Used by: Rust orchestrator (chat/completions, models) and the readiness probe in `start.py`
 
-**Config Layer:**
-- Purpose: Bridge Python config to Rust via subprocess, define AppConfig struct
-- Location: `agent-rs/src/config.rs`
-- Contains: `AppConfig` struct, `load_from_python()` which runs Python inline script to extract config values as JSON
-- Depends on: Python subprocess execution
-- Used by: `main.rs`, `server.rs`
+**Agent Orchestration Layer (Rust):**
+- Purpose: Drive the LLM conversation loop, manage mode/persona, orchestrate tool calls
+- Contains: `main.rs` (2007+ lines — the primary orchestrator), `config.rs` (`AppConfig`, `BackendCapabilities`), `runtime_profile.rs`, `watchdog.rs`, `session.rs`, `eval.rs`
+- Depends on: inference server, tool layer, context engine, security layer, audit store
+- Used by: all three UIs; also hosts the GSD slash-command bridge to `gsd-sdk` and `agent_core::orchestration`
 
-**Security Layer:**
-- Purpose: Multi-layer tool call security — permission tiers, command validation, capability enforcement, Docker sandbox
-- Location: `agent-rs/src/security/`
-- Contains: `policy.rs` (PolicyEngine, evaluate_tool_call, RiskLevel, PermissionTier, TrustLevel, command allowlist, prompt injection detection), `capabilities.rs` (CapabilitySet: read_only/guided_repair/autonomous), `sandbox.rs` (DockerSandbox with bollard)
-- Depends on: path-security, shell-sanitize, soft-canonicalize, shell-words, bollard, regex
-- Used by: `tool_runtime.rs`, `tools.rs`
+**Tool Layer (Rust):**
+- Purpose: Define and execute the tools the model can call (filesystem, terminal, codebase search, system diagnostics, service repair)
+- Contains: `Tool` trait + `ToolRegistry` (`tools.rs`), `ToolRuntime` async executor (`agent_core/tool_runtime.rs`), repair tools (`agent_core/repair/tools.rs`), web research tools (`agent_core/web_research/*`)
+- Depends on: security policy, audit store, sandbox, context engine
+- Used by: orchestrator round-trip loop in all three UI paths
 
-**Context Engine:**
-- Purpose: Symbol-aware, budget-bounded context retrieval with durable memory
-- Location: `agent-rs/src/context/`
-- Contains: `indexer.rs` (Tree-sitter parser, SQLite symbol cache, incremental invalidation), `retrieval.rs` (exact+LIMIT+substring search, budget enforcement), `memory.rs` (SQLite sessions, FTS5 memory search, edit ledger), `skeleton.rs` (body elision), `budget.rs` (tiktoken-rs wrapper), `mod.rs` (ContextEngine facade)
-- Depends on: tree-sitter, tree-sitter-rust, rusqlite, sha2, tiktoken-rs, ignore
-- Used by: `main.rs`, `tools.rs` (search_codebase tool)
+**Security Layer (Rust):**
+- Purpose: Gate every tool call — permission tiers, blocked commands, Docker sandboxing, trust-aware capability checks
+- Contains: `security/policy.rs` (646 lines — `PolicyContext`, `evaluate_tool_call`, `TrustLevel`), `security/sandbox.rs` (`DockerSandbox`), `security/capabilities.rs`
+- Depends on: `types.rs` (`PermissionRequester`), `config.rs` (permission tier settings)
+- Used by: `ToolRuntime::execute` before every tool run; also `main.rs` and `server.rs` build `PolicyContext` for each call
 
-**Tool Runtime:**
-- Purpose: Execute tool calls with full lifecycle: policy check → approval → sandbox → audit → result
-- Location: `agent-rs/src/agent_core/tool_runtime.rs`
-- Contains: `ToolRuntime` struct, `execute()` async method, `execute_sync()` blocking method, DockerSandbox dispatch for `run_terminal_command`, SafetyLoop-wrapped transactional tool execution
-- Depends on: security/ (policy + sandbox), tools/ (ToolRegistry), audit/, repair/ (SafetyLoop)
-- Used by: `main.rs`, `server.rs`, `orchestration/mod.rs`
+**Context Engineering Layer (Rust):**
+- Purpose: Symbol-aware, budget-bounded workspace context for the model — replaces naive RAG chunking
+- Contains: `context/indexer.rs` (tree-sitter → SQLite symbol cache), `context/retrieval.rs`, `context/memory.rs` (sessions/edit ledger), `context/skeleton.rs`, `context/budget.rs` (tiktoken-rs), plus `context/web_research` evidence pipeline
+- Depends on: SQLite (`rusqlite`), tree-sitter, tiktoken-rs, workspace root
+- Used by: orchestrator at startup (index + repo skeleton) and per-query (`build_context`)
 
-**Agent Core Subsystems:**
-- Guardian: Multi-specialist quorum voting (Allow/Deny/Abstain) with configurable thresholds per RiskLevel
-- Diagnostics: SystemProvider (processes/stats/services/logs) + DiagnosticEngine (Observe→Hypothesize→Test→Synthesize→Done state machine) with Bayesian confidence
-- Repair: SnapshotManager (tar.gz/VSS) + SafetyLoop (snapshot→execute→validate→rollback) + Service/Package/Permission repair tools
-- Web Research: FreshnessClassifier (rule-based TTL) → ResearchPlanner (crate+DuckDuckGo) → WorkerPool (concurrent fetch, SSRF protection, rate limiting) → EvidenceStore (SQLite) → EvidenceSynthesizer (brief assembly)
-- Orchestration: Phase state machine (Discover→Discuss→Plan→Execute→Verify→Close) with artifact persistence and context reset
-
-**TUI Layer:**
-- Purpose: Rich terminal UI with streaming responses, command palette, multiple themes
-- Location: `agent-rs/src/tui.rs` + `agent-rs/src/tui/`
-- Contains: Main TUI event loop, state management (TuiState), command palette with filtering, approval prompts (inquire), themes (Dark/Light/Nord/Gruvbox), sidebar with context files + tool timeline
-- Depends on: ratatui, crossterm, tui-input, throbber-widgets-tui, tachyonfx, inquire
-- Used by: `main.rs` (when `HELIX_UI_MODE=tui`)
-
-**Web Server Layer:**
-- Purpose: Axum-based REST API for browser UI
-- Location: `agent-rs/src/server.rs`
-- Contains: POST `/chat` (SSE streaming), GET `/health`, GET `/v1/status`, GET `/v1/tools`, GET `/v1/context`
-- Depends on: axum, tower-http (CORS), tokio-stream
-- Used by: `main.rs` (when `HELIX_UI_MODE=web`), `web-ui/` (Vite frontend)
-
-**Audit:**
-- Purpose: Tamper-evident event logging with hash chain verification
-- Location: `agent-rs/src/audit.rs`
-- Contains: `AuditEvent` struct, `AuditStore` (SQLite-backed), `append_event()` (computes SHA-256 chain hash), `query_events()` (filters by time/path/tool/decision/outcome), `verify_chain()` (replays and validates entire hash chain)
-- Depends on: rusqlite, sha2
-- Used by: `tool_runtime.rs`, `diagnostics/reasoning.rs`, `main.rs`
+**UI Layer:**
+- Purpose: Present and accept conversation
+- Contains: terminal REPL (`input.rs` + inline loop in `main.rs`), ratatui TUI (`tui.rs` 1922 lines + `tui/{api,approval,commands,events,state,themes}.rs`), web server (`server.rs` axum/SSE) + React frontend (`web-ui/src/App.tsx`)
+- Depends on: orchestration layer; TUI/web communicate via `TuiAction`/`TuiEvent` channels and `ToolLifecycle` events
+- Used by: end user
 
 ## Data Flow
 
-### Primary Request Path (TUI Mode)
+**CLI Command Execution (full stack):**
 
-1. **User Input** → `tui.rs` captures keystrokes via crossterm, assembles text in tui-input buffer
-2. **Submit** → `TuiAction::Submit(text)` sent via mpsc channel to main event loop in `main.rs`
-3. **Message Build** → `ChatMessage { role: "user", content: text }` pushed to message vec
-4. **LLM Request** → `run_llm_loop_tui()` sends POST to `{base_url}/v1/chat/completions` with messages + tools + grammar
-5. **Stream Parse** → `stream.rs::SseParser` decodes SSE `data:` lines into JSON chunks
-6. **Tool Call Detection** → If response contains `tool_calls`, extract function name + arguments
-7. **Policy Evaluation** → `tool_runtime.rs` calls `evaluate_tool_call()` → `policy.rs` checks PermissionTier, command allowlist, metacharacters, path traversal, prompt injection
-8. **Approval** → If `RequireApproval`, `InquirePermissionRequester` prompts user via TUI dialog
-9. **Sandbox Execution** → `run_terminal_command` → `DockerSandbox::run_command()` (alpine container)
-10. **Audit** → `AuditStore::append_event()` records decision + outcome with hash chaining
-11. **Tool Reply** → Tool result pushed as `ChatMessage { role: "tool" }` — if failed, critic injection adds corrective directive
-12. **Loop** → Steps 4–11 repeat (max 20 rounds) until final text response
-13. **Display** → Text response sent as `TuiEvent::StreamChunk` for real-time rendering
+1. `python start.py` — discovers GGUF models (`config.scan_models_directory`), resolves port, consults onboarding profile (`scripts/onboarding_profile.py`), prompts for model/interface/mode (`start.py:113-229`)
+2. `start.py` boots `python scripts/start_server.py` as a subprocess with `HELIX_MODEL_*` env vars, logs to `logs/start_server.{stdout,stderr}.log` (`start.py:266-272`)
+3. `scripts/start_server.py` resolves model profile from `scripts/config.py`, spawns `llama.cpp/build/bin/llama-server` (or KoboldCPP fallback on OOM/crash), serving `/v1` (`scripts/start_server.py:97-186`)
+4. `start.py` polls `http://127.0.0.1:PORT/v1/models` until ready, then hands off: `cargo run` (terminal/tui) or `cargo run` + `npm run dev` (web) (`start.py:276-371`)
+5. `agent-rs/src/main.rs:577` loads `AppConfig` from the Python runtime, probes backend capabilities (`config::probe_backend_capabilities`), selects `RuntimeProfile`, builds `Watchdog`, `ToolRegistry`, `AuditStore`, `ToolRuntime`, and `ContextEngine` (indexes workspace into `.helix/helix_context.db`, builds a 5k-token repo skeleton)
+6. UI loop collects input; system prompt + repo skeleton injected as first `system` message
+7. `run_llm_loop_tui` (`main.rs:1668`) or the terminal loop posts `/chat/completions` with `tools` payload (and GBNF `grammar` for KoboldCPP) via `send_with_recovery`
+8. On `tool_calls` in the response, each call is executed: `ToolRuntime::execute` → `evaluate_tool_call` (policy) → permission prompt (TUI) → `spawn_blocking` tool run (30s timeout) → `ToolResult` appended as `role: "tool"` message (`main.rs` / `server.rs:320-419`)
+9. Loop repeats up to 20 rounds; context compaction (LLM summarization) triggers at 70% token threshold; final text emitted to UI
+10. On exit, `start.py` tears down the Rust agent and the inference server (`start.py:372-385`)
 
-### Web Research Pipeline
+**Web/SSE Path:**
 
-1. **Trigger** → `ContextEngine::enrich_with_research()` called with user query
-2. **Freshness Check** → `FreshnessClassifier::needs_live_search()` checks keywords (latest/new/deprecated/cve) + cache TTL
-3. **Planning** → `ResearchPlanner::plan()` generates DuckDuckGo search + docs.rs URLs
-4. **Fetch** → `WorkerPool::run()` spawns N concurrent workers, each respecting rate limiter (2 req/s) and SSRF block
-5. **Store** → Fetched HTML → `sanitize_html_to_markdown()` → stored in `EvidenceStore` (SQLite)
-6. **Synthesize** → `EvidenceSynthesizer::brief_from_store()` builds `ResearchBrief` capped at ~1500 tokens
-7. **Inject** → Brief formatted as `ResearchBrief::to_context_string()` for LLM context
-
-### Repair Safety Loop
-
-1. **Pre-snapshot** → `SnapshotManager::create_snapshot()` (tar.gz on Linux, VSS on Windows)
-2. **Execute** → Transactional tool (service_repair, package_repair, permission_repair) runs
-3. **Validate** → Validation function checks result success
-4. **Commit or Rollback** → On failure: `SnapshotManager::restore_snapshot()` reverts changes
-
-### Audit Hash Chain
-
-1. Each `append_event()` computes: `SHA-256(timestamp || actor || path || event_type || tool_name || decision || outcome || reason || remediation || args_hash || output_hash || duration_ms || prev_hash)`
-2. `prev_hash` is the `event_hash` of the previous row (or 64 zeros for genesis)
-3. `verify_chain()` replays all events from genesis, recomputes hashes, and checks chain integrity
+1. `HELIX_UI_MODE=web` → `main.rs:695` calls `server::start_web_server` (axum on `127.0.0.1:3000`)
+2. React app (`web-ui/src/App.tsx:38`) POSTs `{messages}` to `/chat`
+3. `chat_handler` (`server.rs:142`) spawns a tokio task running the same round-trip loop, streaming `AgentEventPayload` events (`text`, `tool_start`, `tool_status`, `tool_result`, `system`, `done`) over SSE
+4. Frontend renders text chunks and tool lifecycle events from the SSE stream
 
 **State Management:**
-- **Message state**: In-memory `Vec<ChatMessage>` with compaction at 70% context size
-- **Durable session**: `session.rs` JSON files at `~/.helix/sessions/session.latest.json`
-- **Durable memory**: `context/memory.rs` SQLite with FTS5 (survives context resets)
-- **Symbol index**: `context/indexer.rs` SQLite with SHA-256 incremental invalidation
-- **Web research evidence**: `web_research/store.rs` SQLite
-- **Audit log**: `audit.rs` SQLite with SHA-256 hash chain
-- **Config**: Generated `scripts/config.py` loaded by Rust via subprocess
+- Stateless orchestrator per process; all durable state in SQLite under `.helix/` — `helix_context.db` (symbol index, sessions, memory, web-research evidence) and audit DB configured via `AppConfig.audit_db_path`
+- `SnapshotManager` backups to `.helix/backups` (`agent_core/repair/snapshots.rs`)
+- Python onboarding profile persisted under the user home dir (`scripts/onboarding_profile.py`)
+- Per-run state is env-var-driven (`HELIX_*`) with values regenerated by `start.py`
 
 ## Key Abstractions
 
-**Tool Trait:**
-- Purpose: Pluggable tool definition with schema, execution, and transactional support
-- Examples: `RunTerminalCommandTool`, `ReadFileTool`, `WriteFileTool`, `ServiceRepairTool` in `agent-rs/src/tools.rs` and `agent-rs/src/agent_core/repair/tools.rs`
-- Pattern: `trait Tool: Send + Sync { fn name() -> String; fn description() -> String; fn schema() -> Value; fn execute(...) -> ToolResult; fn is_transactional() -> bool }`
+**Tool:**
+- Purpose: Unit of capability exposed to the model (filesystem, terminal, system, repair)
+- Examples: `run_terminal_command`, `read_file`, `write_file`, `search_codebase`, `get_system_stats`, `get_system_logs`, service/package/permission repair tools
+- Pattern: `trait Tool { name(); description(); schema(); execute() -> ToolResult }` (`agent-rs/src/tools.rs:94`), registered in `ToolRegistry` (HashMap) via `create_default_registry()` (`agent-rs/src/tools.rs:109`)
 
 **ToolRuntime:**
-- Purpose: Central executor for all tool calls with policy approval, Docker sandboxing, audit logging, and SafetyLoop integration
-- File: `agent-rs/src/agent_core/tool_runtime.rs`
-- Pattern: Holds `PermissionRequester` (for HITL approval) and `SafetyLoop` (for transactional rollback); wraps blocking execution in `spawn_blocking` with 30s timeout
+- Purpose: Single async entry point for executing any tool with policy, permission, timeout, lifecycle events, and audit
+- Examples: used by terminal, TUI, web, and GSD orchestration paths
+- Pattern: Facade over `execute_sync` + `spawn_blocking` + `tokio::time::timeout` (`agent-rs/src/agent_core/tool_runtime.rs:48`)
 
-**PolicyEngine:**
-- Purpose: Validate and sanitize shell commands against allowlist, metacharacter, path traversal, and injection rules
-- File: `agent-rs/src/security/policy.rs`
-- Pattern: Chain of validators — metacharacter check → shell-word parse → blocked command check → dangerous command check → allowlist check → path canonicalization → security context
-
-**AuditStore:**
-- Purpose: Tamper-evident append-only SQLite event log with hash chain
-- File: `agent-rs/src/audit.rs`
-- Pattern: Each event includes `prev_hash` pointing to previous event's SHA-256 hash; `verify_chain()` replays entire log for integrity
+**PolicyContext / evaluate_tool_call:**
+- Purpose: Gate every tool invocation — permission tier, trust level, workspace root, exec mode
+- Examples: `security/policy.rs` — `PolicyDecision`, `blocked_command_reason`, `command_matches_block_pattern`, `TrustLevel::from_permission_tier`
+- Pattern: Pure-function policy evaluation; part of the `PolicyContext` passed to each `ToolRuntime::execute` call
 
 **ContextEngine:**
-- Purpose: Facade over Indexer + Retrieval + Memory + Web Research
-- File: `agent-rs/src/context/mod.rs`
-- Pattern: Lazy initialization — `new()` creates shell, `initialize()` opens SQLite connections and builds index; exposes `build_context()`, `build_repo_skeleton()`, `enrich_with_research()`
+- Purpose: Central facade for workspace context (symbol index, retrieval, memory, research)
+- Examples: `ContextEngine::new` → `initialize()` → `build_context(query)`, `build_repo_skeleton(budget)` (`agent-rs/src/context/mod.rs:76`)
+- Pattern: Facade over Indexer / RetrievalEngine / MemoryEngine / WebResearchPipeline (lazy components, initialized once at startup)
 
-**Guardian:**
-- Purpose: Multi-specialist quorum voting system for tool call safety
-- File: `agent-rs/src/agent_core/guardian.rs`
-- Pattern: Spawns N specialist simulacra (futures), each votes Allow/Deny/Abstain; quorum check applies risk-level thresholds (Critical=100%, High=75%, Medium=51%, Low=0%)
+**ChatMessage / ChatResponse / ServerFlavor:**
+- Purpose: OpenAI-compatible wire types and backend detection
+- Examples: `agent-rs/src/types.rs` — `ChatMessage` (role/content/tool_calls), `ChatResponse{choices}`, `ServerFlavor` enum
+- Pattern: Serde-serializable DTOs shared by all UI paths
 
-**DiagnosticEngine:**
-- Purpose: Systematic root-cause analysis with evidence collection and hypothesis testing
-- File: `agent-rs/src/agent_core/diagnostics/reasoning.rs`
-- Pattern: Finite state machine (Observe→Hypothesize→Test→Synthesize→Done) with Bayesian confidence scoring (`calculate_confidence(token_probs, reliability, evidence_coverage)`)
+**AppConfig:**
+- Purpose: Single runtime config struct (model, base_url, exec_mode, context_size, permission_tier, audit flags)
+- Examples: loaded in `config::AppConfig::load_from_python()` (`agent-rs/src/config.rs:9`)
+- Pattern: Loaded from Python runtime (env + `scripts/config.py`), enriched with probed `BackendCapabilities`
+
+**TuiAction / TuiEvent / ToolLifecycle:**
+- Purpose: Message-passing contract between TUI/web frontends and the orchestrator
+- Examples: `TuiAction::{Submit, Quit, Interrupt, SystemCommand}`, `TuiEvent::{ContextUpdate, Status, SystemMessage, ...}` (`agent-rs/src/tui.rs:42,106`), `ToolLifecycle::{Start, Status, Result}` (`agent_core/tool_runtime.rs:30`)
+- Pattern: tokio mpsc channels, serialized as SSE `AgentEventPayload` in web mode
 
 ## Entry Points
 
-**Python Setup:**
-- Location: `setup.py`
-- Triggers: User runs `python setup.py`
-- Responsibilities: Hardware detection (CPU/GPU/Vulkan/OpenVINO), model download (HuggingFace), llama.cpp build, token speed benchmark (≥10 tok/s gate), optional agentic benchmark preflight, configuration generation
-
-**Python Launcher:**
+**Full-stack launcher:**
 - Location: `start.py`
-- Triggers: User runs `python start.py`
-- Responsibilities: Interactive model/interface/mode selection, orphan server cleanup, LLM server boot, readiness wait, Rust binary launch, stack teardown
+- Triggers: `python start.py`
+- Responsibilities: model discovery/selection, inference-server boot + readiness poll, mode/interface selection, agent handoff, guaranteed teardown
 
-**Rust Binary:**
-- Location: `agent-rs/src/main.rs` (produces `helix-agent` binary)
-- Triggers: Direct `cargo run` or via `start.py`
-- Responsibilities: Config load, runtime profile selection, watchdog init, tool registry init, context engine init, audit store init, dispatch to TUI/web/terminal mode, LLM request loop, tool execution loop
+**Agent CLI (Rust):**
+- Location: `agent-rs/src/main.rs` (binary `helix-agent`)
+- Triggers: `cd agent-rs && cargo run`, or invoked by `start.py`
+- Responsibilities: config load, backend probing, context indexing, UI selection (terminal/tui/web), LLM round-trip loop, tool dispatch; also `--prompt` (eval), `--audit-query`, `--layout` flags
 
-**Rust Library:**
-- Location: `agent-rs/src/lib.rs`
-- Triggers: Used by main.rs and tests; publishes `pub mod` declarations for all subsystems
-- Responsibilities: Re-exports key types (`ChatMessage`, `ChatResponse`, `ServerFlavor`), utility functions (`critic_message`, `expose_think_blocks`)
+**Web API:**
+- Location: `agent-rs/src/server.rs` — `start_web_server` on `127.0.0.1:3000`
+- Triggers: `HELIX_UI_MODE=web` at agent startup
+- Responsibilities: routes `/chat` (SSE POST), `/health`, `/v1/status`, `/v1/tools`, `/v1/context`; CORS permissive for the Vite dev server
 
-## Architectural Constraints
+**Inference server bootstrap:**
+- Location: `scripts/start_server.py`
+- Triggers: `python scripts/start_server.py` (standalone) or spawned by `start.py`
+- Responsibilities: resolve model profile, run llama-server with backend flags, detect OOM in logs and fall back, KoboldCPP fallback chain
 
-- **Threading:** Tokio async runtime (single-threaded by default) for main event loop; blocking tool execution is dispatched via `spawn_blocking` with 30s timeout; blocking permission requests use `Handle::block_on` to bridge async/sync boundary
-- **Global state:** `TUI_HTTP_CONNECT_FAILS` atomic counter in `main.rs` for TUI connection tracking; `PermissionRequester` and `SafetyLoop` held behind `Arc` on `ToolRuntime`
-- **Circular imports:** None detected — `lib.rs` declares modules in dependency order; `agent_core` depends on `security` and `audit`; `tools` depends on `security` and `agent_core::repair::tools`
-- **Python ↔ Rust bridge:** Single subprocess invocation at startup to load config; no runtime Python dependency after initialization
-- **SQLite concurrency:** Multiple subsystems share the same DB file (`helix_context.db`) but each opens its own connection with WAL mode enabled
-- **Error handling:** All subsystem errors propagate as `Box<dyn std::error::Error>` or formatted Strings; tool errors return `ToolResult { success: bool, output: String }`; no panics in normal tool execution paths
-
-## Anti-Patterns
-
-### Blocking on Async in Sync Context
-
-**What happens:** `ToolRuntime::execute_sync()` calls `Handle::block_on` to await async permission requests from synchronous execution context.
-**Why it's wrong:** Can cause thread-pool starvation if the runtime handle is saturated; deadlocks if called from within a tokio task running on the same runtime.
-**Do this instead:** Make the entire execution path async up to the permission layer. The current pattern in `main.rs` and `server.rs` already calls `tool_runtime.execute().await` which is the async wrapper. The issue is only inside `execute_sync()` for the `RequireApproval` path.
-
-### Mixed Error Handling Styles
-
-**What happens:** Some functions return `Result<T, String>`, others use `Result<T, Box<dyn std::error::Error>>`, and tool definitions return a `ToolResult` struct with a boolean `success` flag.
-**Why it's wrong:** Callers cannot use `?` uniformly; error context is lost when converting to `String`; impossible to pattern-match on structured error types.
-**Do this instead:** Define a unified `AgentError` enum (or use `anyhow::Error` / `color-eyre`) across the crate, and keep `ToolResult` only for actual tool output (where success/failure is meaningful to the LLM).
+**GSD orchestration:**
+- Location: `agent-rs/src/agent_core/orchestration/mod.rs` — `advance_phase`
+- Triggers: `/gsd <phase>` and `/gsd-*` slash commands in TUI (`main.rs:969-1134`)
+- Responsibilities: phase state machine, artifact persistence to `.planning/phases/{NN}-{slug}/`, telemetry events
 
 ## Error Handling
 
-**Strategy:** Hybrid — structured errors in the security layer (`SecurityError` enum with Display/Error impls), boolean flags in tool execution (`ToolResult { success, output }`), and `Box<dyn std::error::Error>` for context engine operations.
+**Strategy:** Fail-fast validation at boundaries; structured `ToolResult { success, output }` for tool failures; top-level `main() -> Result<(), Box<dyn Error>>`; transient HTTP failures trigger server restart via `Watchdog`; Python launcher surfaces log tails with actionable diagnostics.
 
 **Patterns:**
-- Security errors use a rich `SecurityError` enum with specific variants: `EmptyCommand`, `ParseError`, `MetacharacterBlocked`, `DangerousCommand`, `CommandNotAllowlisted`, `PathTraversal`, `Sanitization`
-- Tool execution uses `ToolResult { success: bool, output: String }` — designed for LLM consumption with error messages in the output string
-- Configuration errors propagate as `Result<_, String>` for simple fallback
-- Policy decisions use `PolicyDecision` enum: `Allow`, `RequireApproval { reason_code, message }`, `Deny { reason_code, message, remediation }`
-- Tool execution timeout: 30-second hard limit via `tokio::time::timeout` with automatic failure response
-- LLM HTTP errors: retry with exponential backoff (1s base, 3 attempts) and full server recovery (watchdog reboot)
-- Prompt injection: regex-based detection in tool arguments, denies with remediation suggestion
-- All tool execution results are audited regardless of success/failure
+- `send_with_retry` → `send_with_recovery` → `maybe_boot_model_server`: retry 3×, then reboot the inference server with `Watchdog` backoff, then forced retry up to 45 attempts (`main.rs:338-574`)
+- Tool execution wrapped in `spawn_blocking` + 30s `timeout`, converting panics/timeouts to failed `ToolResult` (`agent_core/tool_runtime.rs:85-119`)
+- Safety cap: 20 action rounds max in every loop (terminal, TUI, web) with a "Safety exit" message
+- OOM diagnosis: `main.rs` scans `logs/start_server.stderr.log` for "out of memory"/"CUDA error" and `start_server.py` retries with fallback GPU layers / KoboldCPP
+- Critic injections: on `run_terminal_command` failure the model is re-prompted to analyze and retry differently; after `write_file` it is prompted to verify by reading back (`main.rs`, `server.rs:395-410`)
 
 ## Cross-Cutting Concerns
 
-**Logging:** `println!` / `eprintln!` throughout (no structured logging crate). Server stderr/stdout captured to `logs/start_server.{stdout,stderr}.log`. Audit events logged to SQLite with tamper evidence.
+**Logging:**
+- Rust: `println!`/`eprintln!` with `[Context]`, `[Runtime]`, `[Watchdog]` prefixes; per-mode banners; `error.log`/`error.txt` at repo root
+- Python: logs redirected by `start.py` to `logs/start_server.{stdout,stderr}.log`; launcher tails the last 25 lines on failure
+- Model server stderr is the source for OOM detection
 
-**Validation:** Defense-in-depth: (1) Schema validation via `schemars` at tool boundary, (2) PolicyEngine command validation (allowlist + metacharacters + path traversal), (3) Docker sandbox for terminal execution, (4) Prompt injection detection in tool arguments, (5) Guardian specialist voting for sensitive operations.
+**Validation:**
+- Tool input schemas via `schemars` (`JsonSchema` derive) compiled to JSON and (for KoboldCPP) to GBNF grammar (`tools::generate_tool_grammar`)
+- Command validation at policy layer: blocked patterns, interpreter allowlists (`INTERPRETER_COMMANDS` in `tool_runtime.rs:14`), shell sanitization (`shell-sanitize`, `path-security` crates)
+- Python-side hardware preflight gate in `setup.py` (≥10 tok/s + agentic benchmark)
 
-**Authentication:** None — all endpoints bind to `127.0.0.1` (localhost only). No auth tokens, no user authentication, no API keys for the agent's web server.
+**Authentication:**
+- Local-only; no auth on the axum web API (`CorsLayer::permissive()`), bound to `127.0.0.1`
+- Permission enforcement is human-in-the-loop: `InquirePermissionRequester` (`tui/approval.rs`) prompts before dangerous commands in terminal/TUI; web mode sets `require_confirmation` from config
+
+**Auditing:**
+- `audit.rs` (`AuditStore`) writes hash-chained tamper-evident events to SQLite when `audit_enabled`; queryable via `--audit-query` which also verifies the chain
+
+**Configuration:**
+- Single source of truth `scripts/config.py` (generated by `setup.py`), overridden at every boundary via `HELIX_*` env vars; Rust reads env vars and parses `scripts/config.py` constants directly (`main.rs:231-267`)
 
 ---
 
-*Architecture analysis: 2026-07-30*
+*Architecture analysis: 2026-08-03*
+*Update when major patterns change*

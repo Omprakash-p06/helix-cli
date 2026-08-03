@@ -1,150 +1,107 @@
 # External Integrations
 
-**Analysis Date:** 2026-07-30
+**Analysis Date:** 2026-08-03
 
 ## APIs & External Services
 
-**LLM Backend (OpenAI-compatible API):**
-- **Primary:** Local llama.cpp server (`llama-server`) — runs as a subprocess, exposes OpenAI-compatible `/v1/` REST API
-- **Fallback:** KoboldCPP binary — downloaded from GitHub releases, same API surface
-- **Protocol:** OpenAI Chat Completions API (`/v1/chat/completions`), Models API (`/v1/models`), Completions API (`/v1/completions`)
-- **Communication:** HTTP via `reqwest` (Rust) and `requests` (Python)
-- **Auth:** None (local-only, bound to `127.0.0.1`)
-- **Discovery:** Rust agent probes `/v1/models` and inspects response body for "kobold" vs "llama" strings to detect server flavor (`agent-rs/src/main.rs:19-39`)
-- **Configuration:** `scripts/config.py` defines `BASE_URL` (default `http://127.0.0.1:8080/v1`), `MODEL_NAME`, `SERVER_PORT`
+**Model Registry (HuggingFace Hub):**
+- HuggingFace - GGUF model download and repo search during setup (`setup.py`, `scripts/model_install.py`, `scripts/download_model.py`)
+  - SDK/Client: `huggingface_hub` (`hf_hub_download`, `HfApi`) with `requests` + `tqdm` streaming fallback
+  - Auth: none (public repos; no HF token required)
+  - Endpoints used: `https://huggingface.co/api/models` (search), `https://huggingface.co/api/models/{repo}/tree/main` (file listing), `https://huggingface.co/{repo}/resolve/{revision}/{filename}` (download)
+  - Integrity: pinned git revisions + SHA256 verification enforced in `TRUSTED_MODELS` (`scripts/model_install.py`); models flagged `UNVERIFIED_REVISION` are blocked until pinned
+  - Known repos: `Qwen/Qwen3.6-27B-Instruct-GGUF`, `Qwen/Qwen3.6-35B-Instruct-GGUF`, `DavidAU/OpenAi-GPT-oss-20b-abliterated-uncensored-NEO-Imatrix-gguf`, `HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive`, `unsloth/gemma-4-E4B-it-GGUF`
 
-**HuggingFace Hub API:**
-- **Purpose:** Model discovery and GGUF file downloads during `setup.py`
-- **Endpoints:**
-  - `https://huggingface.co/api/models` — Search for models by query (`setup.py:297`)
-  - `https://huggingface.co/api/models/{repo}/tree/main` — List files in model repo (`setup.py:316`)
-  - `https://huggingface.co/{repo}/resolve/main/{path}` — Direct file download (`setup.py:383`)
-- **SDK/Client:** `requests` library (raw HTTP), `huggingface_hub` package
-- **Auth:** None (public repositories)
+**Source/Binary Downloads:**
+- KoboldCPP - Fallback inference binary (only used when llama.cpp fails)
+  - Integration method: direct download from `https://github.com/LostRuins/koboldcpp/releases/latest/download/` (per-OS filename: `koboldcpp.exe`, `koboldcpp-linux-x64`, `koboldcpp-mac-x64`) (`setup.py` `KOBOLD_URLS`)
+  - Auth: none
+- llama.cpp - Inference engine source, cloned from `https://github.com/ggerganov/llama.cpp.git` when missing (`setup.py` `build_llama_cpp`); not a git submodule, build output gitignored
 
-**GitHub Releases (KoboldCPP):**
-- **Purpose:** Download KoboldCPP fallback binary during setup
-- **URL:** `https://github.com/LostRuins/koboldcpp/releases/latest/download/koboldcpp-{platform}`
-- **Platform binaries:** `koboldcpp.exe` (Windows), `koboldcpp-linux-x64` (Linux), `koboldcpp-mac-x64` (macOS)
-- **SDK/Client:** `requests` library, streaming download with `tqdm` progress
+**LLM Inference API (local, primary runtime integration):**
+- llama-server (llama.cpp) or KoboldCPP - OpenAI-compatible `/v1` HTTP server on `127.0.0.1:8080` (port overridable via `HELIX_SERVER_PORT`)
+  - Integration method: OpenAI-compatible REST API consumed by the Rust agent via `async-openai 0.33` and `reqwest` (`agent-rs/src/main.rs`, `agent-rs/src/server.rs`)
+  - Endpoints used: `GET /v1/models`, `POST /v1/chat/completions` (streaming), `POST /v1/completions` (benchmark), `GET /props` (capability probe: `has_jinja` → function calling)
+  - Capability detection: `probe_backend_capabilities` in `agent-rs/src/config.rs` (function calling enabled for gemma/functionary/hermes model IDs or `has_jinja`)
+  - Backend flavor detection (`ServerFlavor::LlamaCpp`/`KoboldCpp`) in `agent-rs/src/main.rs:19` — KoboldCpp gets GBNF grammar tool calling instead of native function calls
+  - Server process managed by `scripts/start_server.py` (llama-server → VRAM-OOM fallback → KoboldCPP chain)
 
-**GSD SDK CLI:**
-- **Purpose:** GSD phase commands from within the TUI (`/gsd`, `/gsd-*` slash commands)
-- **Binary:** External `gsd-sdk` process called via `std::process::Command`
-- **Usage:** `gsd-sdk progress --model <name>`, `gsd-sdk init`, etc.
-- **Communication:** Process stdout/stderr capture
-- **Type:** Optional integration — GSD commands silently fail if binary not found (`agent-rs/src/main.rs:972-1122`)
+**Web Research (agent tool):**
+- DuckDuckGo HTML search - `https://html.duckduckgo.com/html/?q=...` (no API key, HTML scraping) (`agent-rs/src/agent_core/web_research/planner.rs`)
+- crates.io and docs.rs - Rust crate documentation lookups (`https://crates.io/crates/{name}`, `https://docs.rs/{name}`) (`agent-rs/src/agent_core/web_research/planner.rs`)
+- Arbitrary URLs - fetched directly with `reqwest`, sanitized to markdown via `scraper` + `htmd` (`agent-rs/src/agent_core/web_research/sanitize.rs`)
+  - Security: SSRF guard rejects loopback/private ranges (e.g. `127.0.0.1`, `10.0.0.0/8`, `169.254.169.254`) before fetching
+
+**System/GPGPU Detection:**
+- nvidia-smi - GPU VRAM detection (`nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits`) (`scripts/config.py` `detect_gpu_vram_gb`); GPU stats also read by the Rust agent
+- Docker daemon - sandboxed command execution via local socket (`Docker::connect_with_local_defaults()` in `agent-rs/src/security/sandbox.rs`, bollard SDK; containers named `helix-sandbox-{ts}`)
 
 ## Data Storage
 
 **Databases:**
-- **SQLite** via `rusqlite` (Rust) — Two separate databases:
-  1. **Audit Chain DB** — `logs/audit.db` — Tamper-evident event log with SHA-256 hash chaining (`agent-rs/src/audit.rs:32-50`). Schema: `audit_logs` table with columns for timestamp, actor, path, event_type, tool_name, decision, outcome, prev_hash, event_hash.
-  2. **Context Engine DB** — `.helix/helix_context.db` — Symbol cache and import edges (`agent-rs/src/context/indexer.rs:31-61`). Schema: `symbol_cache`, `symbols`, `import_edges` tables with WAL journal mode.
+- SQLite (embedded) - Command audit log
+  - Client: `rusqlite 0.39` with `bundled` feature (no external SQLite dependency) (`agent-rs/src/audit.rs`)
+  - Location: `logs/audit.db` (path from `AUDIT_DB_PATH` in `scripts/config.py`); `agent-rs/test_audit*.db` are gitignored cargo-test artifacts
 
 **File Storage:**
-- **Local filesystem only** — Model files stored in `models/` directory as `.gguf` files.
-- Logs stored in `logs/` directory.
-- Configuration stored in `scripts/config.py`.
-- Snapshots stored in `.helix/backups/` directory.
+- Local filesystem only - no cloud storage
+  - Models: `models/` (GGUF files, gitignored; `.staging/` used for verified downloads)
+  - Logs: `logs/` (server stdout/stderr, audit DB)
+  - User state: `~/.helix/onboarding_profile.json` + `~/.helix/sessions/` (JSON files, `scripts/onboarding_profile.py`)
 
 **Caching:**
-- **Context engine symbol cache** — SQLite-backed incremental cache with SHA-256 file hashing for invalidation (`agent-rs/src/context/indexer.rs:76-90`). Only re-indexes changed files.
-- **Web research evidence store** — In-memory `EvidenceStore` (`agent-rs/src/agent_core/web_research/store.rs`) with freshness classifier to skip redundant live searches (`agent-rs/src/agent_core/web_research/classifier.rs`).
+- None (no Redis/memcached; context/memory handled in-process by `agent-rs/src/context/memory.rs`)
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- **None** — All services operate locally on `127.0.0.1`. No external auth tokens, OAuth providers, or identity services.
-- **Local user identity** — `PermissionRequester` trait (`agent-rs/src/types.rs:47-49`) implemented by `InquirePermissionRequester` (`agent-rs/src/tui/approval.rs`) for interactive tool execution approval.
+- None - fully local, no user accounts or auth. The only "identity" is the local user profile at `~/.helix/onboarding_profile.json` (plain JSON, no credentials)
+
+**OAuth Integrations:**
+- None
+
+**API Keys/Secrets:**
+- None stored or required (all external services are public-download or local-loopback). No `.env` files exist in the repo.
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- **None** — No Sentry, DataDog, or similar services. All errors go to stderr/stdout logs.
+- None (no Sentry/other)
+
+**Analytics:**
+- None
 
 **Logs:**
-- **File-based** — `logs/start_server.stdout.log` and `logs/start_server.stderr.log` capture LLM server output.
-- **Console** — Rust agent logs to stdout/stderr during operation.
-- **Audit chain** — SQLite-backed structured log of all tool execution decisions (`agent-rs/src/audit.rs`).
-
-**Health Checks:**
-- **Watchdog** — Internal `Watchdog` struct (`agent-rs/src/watchdog.rs`) tracks LLM server health with states: Healthy, Degraded, Recovering, Cooldown, Unhealthy. Supports auto-restart with exponential backoff up to 3 restarts with 5-minute cooldown.
-- **Probe** — Rust agent sends periodic `/v1/chat/completions` probe requests to verify model readiness (`agent-rs/src/main.rs:390-413`).
+- Local file logs only: `logs/start_server.stdout.log`, `logs/start_server.stderr.log`, per-run `logs/{tag}_{timestamp}.stdout.log`/`.stderr.log` written by `setup.py`/`start.py`
+- Command audit trail in SQLite (`logs/audit.db`) with tamper-evident hashes (`agent-rs/src/audit.rs`)
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- **Self-hosted / local desktop** — No cloud deployment. The entire stack runs on the user's machine.
+- None - distributed as local source/zip (`scripts/build_zip.py`); no deployment target
 
 **CI Pipeline:**
-- **None** — No GitHub Actions, Jenkins, or similar pipelines detected.
+- None - no `.github/` directory; validation performed by `tests/eval.py` benchmark + pytest + cargo test run locally, plus `python setup.py --offline-check`
 
 ## Environment Configuration
 
-**Required env vars:**
-- `HELIX_MODEL_NAME`, `HELIX_MODEL_PATH` — Model to load
-- `HELIX_EXEC_MODE` — `chat` or `agentic`
-- `HELIX_UI_MODE` — `tui` or `web`
-- `HELIX_SERVER_PORT` — Server port (default 8080)
+**Development:**
+- No env files; `HELIX_*` variables set ad-hoc or exported in shell. Full list in `STACK.md` under Configuration
+- Setup-time gates: `HELIX_MIN_TOK_S` (token speed threshold, default 10 tok/s), `HELIX_RUN_AGENTIC_PREFLIGHT`, `HELIX_EVAL_MAX_TASKS` (default 4), `HELIX_EVAL_CATEGORIES`
+- Secrets location: not applicable (no secrets)
 
-**Optional env vars** (see STACK.md for full list):
-- `HELIX_GPU_LAYERS`, `HELIX_GPU_VRAM_GB`, `HELIX_BACKEND_HINT`, `HELIX_BATCH_SIZE`, `HELIX_UBATCH_SIZE`, `HELIX_CPU_THREADS`, `HELIX_CONTEXT_SIZE`, `HELIX_RUNTIME_PROFILE`, `HELIX_FORCE_TOOL_GRAMMAR`, `HELIX_CHAT_MAX_TOKENS`, `HELIX_MIN_TOK_S`, `HELIX_SERVER_STARTUP_TIMEOUT_S`, `HELIX_RECOVERY_RETRY_ATTEMPTS`, `HELIX_HTTP_RETRY_DELAY_MS`, `HELIX_RUN_AGENTIC_PREFLIGHT`, `HELIX_MIN_CONTEXT_SIZE`, `HELIX_LOW_END_MODE`, `AGENT_PERSONA`
-
-**Secrets location:**
-- **None** — No secrets management. The system is entirely local with no API keys or credentials.
-- `.env` file present — contains environment configuration (contents not read — see forbidden files policy).
+**Production:**
+- N/A (local-first; no server environments)
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- **None** — The axum web server (`agent-rs/src/server.rs`) exposes REST endpoints (`/v1/status`, `/v1/tools`, `/v1/context`, `/chat`), but these are consumed only by the local web UI frontend, not by external webhooks.
+- None
 
 **Outgoing:**
-- **None** — No webhook callbacks to external services.
-
-## System-Level Integrations
-
-**nvidia-smi:**
-- **Purpose:** GPU VRAM detection for optimal model offload configuration
-- **Method:** `subprocess.run(["nvidia-smi", "--query-gpu=memory.total", ...])` from `scripts/config.py:46-52`
-- **Fallback:** Environment variable `HELIX_GPU_VRAM_GB` override; returns `None` if nvidia-smi unavailable
-
-**Docker Daemon:**
-- **Purpose:** Sandboxed command execution via `bollard` crate (`agent-rs/src/security/sandbox.rs`)
-- **Method:** `Docker::connect_with_local_defaults()` — connects to local Docker socket
-- **Capabilities:** Container creation, start, wait, log capture, and removal. Uses `helix_sandbox` prefix for container naming.
-- **Default image:** `ubuntu:latest` with workspace mounted at `/workspace`
-- **Fallback:** Native command execution when Docker is unavailable (controlled by `sandbox_interpreters` config flag)
-
-**Windows Service Management:**
-- **Purpose:** System service control (status, start, stop) via `windows-service` (`agent-rs/Cargo.toml`)
-- **Used by:** `tools.rs` — `GetServiceStatus` tool for querying service status
-- **Also:** `service-manager` crate for cross-platform service management
-
-**Windows Event Log:**
-- **Purpose:** Parse Windows Event Log (`.evtx`) files for system diagnostics
-- **Library:** `evtx` crate (`agent-rs/Cargo.toml`)
-- **Used by:** `agent_core/diagnostics/` module
-
-**Network Interface Detection:**
-- **Purpose:** Enumerate local network interfaces
-- **Library:** `network-interface` crate (`agent-rs/Cargo.toml`)
-
-## Web Research Pipeline
-
-**Web Fetching:**
-- **Library:** `reqwest` (Rust HTTP client) — used in `agent_core/web_research/worker.rs`
-- **Rate limiting:** `governor` crate — 2 requests/second per worker pool
-- **Timeout:** 30 seconds per request
-- **Body limit:** 1 MB max response body
-- **SSRF protection:** `sanitize.rs` — `is_ssrf_safe()` validation on URLs
-
-**HTML Processing:**
-- **Parsing:** `scraper` crate for HTML parsing
-- **Markdown conversion:** `htmd` crate — HTML-to-Markdown transformation (`agent-rs/Cargo.toml`)
-- **Sanitization:** `sanitize_html_to_markdown()` in `agent_core/web_research/sanitize.rs`
+- None (the agent's HTTP calls are request/response; no event-driven callbacks registered)
 
 ---
 
-*Integration audit: 2026-07-30*
+*Integration audit: 2026-08-03*
+*Update when adding/removing external services*
