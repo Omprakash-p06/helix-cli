@@ -385,7 +385,7 @@ def build_model_entry(model_name: str, vram_gb: Optional[int] = None) -> Dict[st
 
 
 DETECTED_VRAM_GB = detect_gpu_vram_gb()
-DEFAULT_MODEL_NAME = list(MODEL_CATALOG.keys())[0] if MODEL_CATALOG else "Qwen-3.6-27B-MoE"
+DEFAULT_MODEL_NAME = "Gemma-4-E4B" if "Gemma-4-E4B" in MODEL_CATALOG else (list(MODEL_CATALOG.keys())[0] if MODEL_CATALOG else "Qwen-3.6-27B-MoE")
 MODEL_NAME = DEFAULT_MODEL_NAME
 MODEL_PROFILE = build_model_entry(MODEL_NAME, DETECTED_VRAM_GB)
 MODEL_PATH = MODEL_PROFILE["path"]

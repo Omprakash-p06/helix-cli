@@ -47,7 +47,7 @@ def test_qwen_35b_variant_selection_by_vram(vram, expected_quantization, expecte
 
 
 def test_qwen_catalog_exposes_expected_models():
-    assert config.DEFAULT_MODEL_NAME == "Qwen-3.6-27B-MoE"
+    assert config.DEFAULT_MODEL_NAME == "Gemma-4-E4B"
     assert set(config.MODEL_CATALOG) == {"Qwen-3.6-27B-MoE", "Qwen-3.6-35B-MoE", "Gemma-4-E4B"}
     assert config.AVAILABLE_MODELS["Qwen-3.6-27B-MoE"]["repo_alias"] == "qwen-3.6-27b-moe"
     assert config.AVAILABLE_MODELS["Qwen-3.6-35B-MoE"]["repo_alias"] == "qwen-3.6-35b-moe"
