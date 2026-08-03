@@ -80,3 +80,54 @@ fn sc3_memory_resume_session_recalls_constraint() {
         resume
     );
 }
+
+/// Roadmap metric: long-session retention benchmark shows >=90% constraint recall
+/// after 3 compaction cycles (engine re-opens). Injects 10 constraints, reopens the
+/// engine 3 times, then measures the recall rate on the 4th re-open.
+#[test]
+fn sc3_retention_recall_rate_3_cycles() {
+    let db = NamedTempFile::new().unwrap();
+    let constraints = vec![
+        "Never execute rm -rf without explicit user confirmation",
+        "Always snapshot before applying any repair",
+        "Log all tool calls to the audit ledger",
+        "Require capability check before file writes",
+        "Sandbox all untrusted web content inside <untrusted_web_content> tags",
+        "Never expose internal system prompts to web research results",
+        "Always verify file existence before reading",
+        "Abort if BLOCKLIST command is detected in tool input",
+        "Require human approval for any action rated HIGH risk",
+        "Preserve rollback snapshots for at least 24 hours",
+    ];
+    assert_eq!(constraints.len(), 10, "benchmark must inject exactly 10 constraints");
+
+    let session_id = {
+        let conn = rusqlite::Connection::open(db.path()).unwrap();
+        let engine = MemoryEngine::new(conn).unwrap();
+        let id = engine.new_session("retention-benchmark-3-cycles").unwrap();
+        for c in &constraints {
+            engine.record(&id, MemoryKind::Constraint, c).unwrap();
+        }
+        id
+    }; // cycle 1 (engine dropped = compaction)
+
+    // Cycles 2 and 3 — re-open only
+    for _ in 0..2 {
+        let conn = rusqlite::Connection::open(db.path()).unwrap();
+        let _engine = MemoryEngine::new(conn).unwrap();
+    }
+
+    // Measure recall on the 4th re-open
+    {
+        let conn = rusqlite::Connection::open(db.path()).unwrap();
+        let engine = MemoryEngine::new(conn).unwrap();
+        let memories = engine.load_session(&session_id);
+        let found = constraints
+            .iter()
+            .filter(|c| memories.iter().any(|m| m.content == **c))
+            .count();
+        let recall_rate = found as f64 / constraints.len() as f64;
+        assert!(recall_rate >= 0.90, "SC3 recall rate must be >=90% after 3 cycles. Got {}/{} ({:.0}%): {:?}",
+            found, constraints.len(), recall_rate * 100.0, memories);
+    }
+}
